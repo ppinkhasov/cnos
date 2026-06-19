@@ -23,12 +23,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ---- Configuration (override via env) --------------------------------------
 const PORT = Number(process.env.PORT) || 4173;
 const WORKDIR = process.env.CNOS_WORKDIR || os.homedir();
-const CLAUDE_BIN = process.env.CNOS_CLAUDE_BIN || 'claude';
-// The two flags the user asked for: auto mode + max effort.
-const CLAUDE_ARGS = (process.env.CNOS_CLAUDE_ARGS
-  ? process.env.CNOS_CLAUDE_ARGS.split(' ')
-  : ['--dangerously-skip-permissions', '--effort', 'max']
-).filter(Boolean);
+// Agent types — each spawns a different CLI. Defaults run in "auto" mode
+// (auto-accept edits), NOT bypass/dangerous. Override per type with
+// CNOS_<TYPE>_BIN and CNOS_<TYPE>_ARGS (e.g. CNOS_CLAUDE_ARGS="--effort high").
+const AGENT_DEFAULTS = {
+  claude: { bin: 'claude', args: ['--permission-mode', 'auto', '--effort', 'max'] },
+  codex:  { bin: 'codex',  args: ['--full-auto'] },
+  gemini: { bin: 'gemini', args: ['--approval-mode', 'auto_edit'] },
+  hermes: { bin: 'hermes', args: [] },
+};
+const DEFAULT_AGENT = 'claude';
 
 // Make sure common install locations for `claude` are on PATH for spawned PTYs.
 const EXTRA_PATHS = [
@@ -49,7 +53,16 @@ function resolveBin(bin) {
   }
   return bin; // let the spawn surface a clear error if truly missing
 }
-const CLAUDE_PATH = resolveBin(CLAUDE_BIN);
+// Resolve each agent type to an absolute bin + args (both env-overridable).
+const AGENT_TYPES = {};
+for (const [type, def] of Object.entries(AGENT_DEFAULTS)) {
+  const U = type.toUpperCase();
+  const argsEnv = process.env[`CNOS_${U}_ARGS`];
+  AGENT_TYPES[type] = {
+    bin: resolveBin(process.env[`CNOS_${U}_BIN`] || def.bin),
+    args: argsEnv !== undefined ? argsEnv.split(' ').filter(Boolean) : def.args,
+  };
+}
 
 // Voice transcription: local whisper.cpp (no API key, runs offline on-device).
 function resolveWhisper() {
@@ -80,7 +93,11 @@ const MAX_HISTORY = 200_000; // bytes of scrollback retained per agent for repla
 // prompt that must be accepted before it's ready. We auto-accept it (the default
 // option is "Yes, I trust this folder") so the user's first command isn't eaten
 // by the dialog. Self-contained — no edits to the user's global Claude config.
-const TRUST_RE = /trust this folder|Is this a project you (created|trust)/i;
+const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[=>()][AB0-2]?/g;
+// The trust prompt positions words with cursor moves, so the ANSI-stripped text
+// has NO spaces between words. Match the flattened (space-removed) form so the
+// auto-accept is reliable regardless of how Claude draws the screen.
+const TRUST_RE = /trustthisfolder|isthisaprojectyou(created|trust)/i;
 const BOOT_WINDOW_MS = 30_000;
 
 function broadcast(msg) {
@@ -94,7 +111,14 @@ function pickName(requested) {
   return NAME_POOL.find((n) => !used.has(n)) || `agent-${nextId}`;
 }
 
-function spawnTerminal({ name, cwd } = {}) {
+function spawnTerminal({ type, name, cwd } = {}) {
+  const agentType = AGENT_TYPES[type] ? type : DEFAULT_AGENT;
+  const spec = AGENT_TYPES[agentType];
+  if (!spec.bin.includes('/')) { // resolveBin couldn't find it on PATH
+    console.error(`  ! ${agentType} not installed ("${spec.bin}" not on PATH)`);
+    broadcast({ type: 'spawn-error', message: `${agentType} is not installed — "${spec.bin}" not found on PATH` });
+    return null;
+  }
   const id = String(nextId++);
   const agentName = pickName(name);
   let workdir = cwd ? cwd.replace(/^~/, os.homedir()) : WORKDIR;
@@ -102,7 +126,7 @@ function spawnTerminal({ name, cwd } = {}) {
 
   let proc;
   try {
-    proc = pty.spawn(CLAUDE_PATH, CLAUDE_ARGS, {
+    proc = pty.spawn(spec.bin, spec.args, {
       name: 'xterm-256color',
       cols: 100,
       rows: 30,
@@ -110,12 +134,13 @@ function spawnTerminal({ name, cwd } = {}) {
       env: { ...process.env, PATH: SPAWN_PATH, TERM: 'xterm-256color', CNOS_AGENT: agentName },
     });
   } catch (err) {
-    console.error(`  ! failed to spawn "${agentName}": ${err.message}`);
-    broadcast({ type: 'spawn-error', message: `Could not launch ${CLAUDE_PATH}: ${err.message}` });
+    console.error(`  ! failed to spawn ${agentType} "${agentName}": ${err.message}`);
+    broadcast({ type: 'spawn-error', message: `Could not launch ${agentType} (${spec.bin}): ${err.message}` });
     return null;
   }
 
-  const term = { id, name: agentName, cwd: workdir, pty: proc, history: '', trustHandled: false };
+  // Only Claude shows the "trust this folder" dialog; pre-mark others as handled.
+  const term = { id, name: agentName, type: agentType, cwd: workdir, pty: proc, history: '', trustHandled: agentType !== 'claude' };
   terminals.set(id, term);
 
   // Stop watching for the trust prompt once the boot window passes.
@@ -125,7 +150,7 @@ function spawnTerminal({ name, cwd } = {}) {
     term.history += data;
     if (term.history.length > MAX_HISTORY) term.history = term.history.slice(-MAX_HISTORY);
 
-    if (!term.trustHandled && TRUST_RE.test(term.history.slice(-800))) {
+    if (!term.trustHandled && TRUST_RE.test(term.history.slice(-2000).replace(ANSI_RE, '').replace(/\s+/g, ''))) {
       term.trustHandled = true;
       clearTimeout(trustTimer);
       // brief delay so the dialog is fully rendered before we confirm it
@@ -141,15 +166,15 @@ function spawnTerminal({ name, cwd } = {}) {
     terminals.delete(id);
   });
 
-  console.log(`  + spawned "${agentName}" (id ${id}) in ${workdir}`);
-  broadcast({ type: 'spawned', id, name: agentName, cwd: workdir });
+  console.log(`  + spawned ${agentType} "${agentName}" (id ${id}) in ${workdir}`);
+  broadcast({ type: 'spawned', id, name: agentName, agentType, cwd: workdir });
   return term;
 }
 
 function listPayload() {
   return {
     type: 'list',
-    terminals: [...terminals.values()].map((t) => ({ id: t.id, name: t.name, cwd: t.cwd })),
+    terminals: [...terminals.values()].map((t) => ({ id: t.id, name: t.name, agentType: t.type, cwd: t.cwd })),
   };
 }
 
@@ -172,7 +197,7 @@ const CONTROL_SEQ = { interrupt: '\x03', escape: '\x1b', enter: '\r' };
 function handle(ws, msg) {
   switch (msg.type) {
     case 'spawn':
-      spawnTerminal({ name: msg.name, cwd: msg.cwd });
+      spawnTerminal({ type: msg.agentType, name: msg.name, cwd: msg.cwd });
       break;
 
     case 'input': // raw keystrokes from a focused terminal
@@ -274,7 +299,7 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({
     type: 'hello',
     workdir: WORKDIR,
-    launch: `${CLAUDE_BIN} ${CLAUDE_ARGS.join(' ')}`,
+    agentTypes: Object.keys(AGENT_TYPES),
     names: NAME_POOL,
   }));
   ws.send(JSON.stringify(listPayload()));
@@ -291,10 +316,12 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, () => {
-  console.log('\n  ┌─ cnos ── Claude agent fleet orchestrator ─────────────');
+  console.log('\n  ┌─ cnos ── multi-agent fleet orchestrator ──────────────');
   console.log(`  │  open    http://localhost:${PORT}   (use Chrome for voice)`);
   console.log(`  │  workdir ${WORKDIR}`);
-  console.log(`  │  launch  ${CLAUDE_PATH} ${CLAUDE_ARGS.join(' ')}`);
+  for (const [type, spec] of Object.entries(AGENT_TYPES)) {
+    console.log(`  │  ${type.padEnd(7)}${spec.bin} ${spec.args.join(' ')}`.trimEnd());
+  }
   console.log(`  │  voice   ${WHISPER_BIN ? WHISPER_BIN + ' + ' + path.basename(WHISPER_MODEL) : 'whisper NOT found'}`);
   console.log('  └────────────────────────────────────────────────────────\n');
 });

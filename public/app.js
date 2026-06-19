@@ -122,7 +122,7 @@ function dispatch(msg) {
       ensureCard(msg);
       if (pendingSpawnAnnounce) {
         pendingSpawnAnnounce = false;
-        note(`new agent <b>${escapeHtml(msg.name)}</b> is ready — say “<b>${escapeHtml(msg.name)}</b>, …”`);
+        note(`new ${escapeHtml(msg.agentType || 'agent')} <b>${escapeHtml(msg.name)}</b> ready — say “<b>${escapeHtml(msg.name)}</b>, …”`);
       }
       break;
     case 'output':  agents.get(msg.id)?.term.write(msg.data); break;
@@ -146,9 +146,9 @@ function syncList(list) {
 }
 
 // ---- Cards / terminals ------------------------------------------------------
-function ensureCard({ id, name, cwd }) {
+function ensureCard({ id, name, agentType, cwd }) {
   let a = agents.get(id);
-  if (a) { a.name = name; a.cwd = cwd; paintHeader(a); refreshTargets(); return a; }
+  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; paintHeader(a); refreshTargets(); return a; }
 
   const el = CardTpl.content.firstElementChild.cloneNode(true);
   const termEl = el.querySelector('.term');
@@ -171,7 +171,7 @@ function ensureCard({ id, name, cwd }) {
   const ro = new ResizeObserver(() => requestAnimationFrame(doFit));
   ro.observe(termEl);
 
-  a = { id, name, cwd, exited: false, term, fit, ro, el };
+  a = { id, name, agentType: agentType || 'claude', cwd, exited: false, term, fit, ro, el };
   agents.set(id, a);
 
   el.querySelector('.interrupt').onclick = () => send({ type: 'control', target: name, action: 'interrupt' });
@@ -188,6 +188,8 @@ function ensureCard({ id, name, cwd }) {
 
 function paintHeader(a) {
   a.el.querySelector('.name').textContent = a.name;
+  const typeEl = a.el.querySelector('.type');
+  if (typeEl) { typeEl.textContent = a.agentType || ''; typeEl.dataset.type = a.agentType || ''; }
   const cwd = a.el.querySelector('.cwd');
   cwd.textContent = a.cwd.replace(/^.*\//, '…/') || a.cwd;
   cwd.title = a.cwd;
@@ -247,7 +249,7 @@ document.getElementById('cmdForm').addEventListener('submit', (e) => {
   input.value = '';
 });
 
-document.getElementById('addBtn').onclick = () => send({ type: 'spawn' });
+document.getElementById('addBtn').onclick = () => send({ type: 'spawn', agentType: document.getElementById('agentType').value });
 
 // ---- Voice control ----------------------------------------------------------
 const BROADCAST = new Set(['everyone', 'all', 'team', 'fleet', 'everybody', 'guys']);
@@ -259,7 +261,8 @@ const CONTROL = {
 };
 // "new terminal" / "add an agent" / "spawn a cli" → launch a new agent (no target needed)
 const SPAWN_VERB = /^(new|add|create|spawn|launch|open|start|another)\b/;
-const SPAWN_NOUN = /\b(terminal|terminals|agent|agents|cli|claude|window|windows|bot|instance|session)\b/;
+const SPAWN_NOUN = /\b(terminal|terminals|agent|agents|cli|claude|codex|gemini|hermes|window|windows|bot|instance|session)\b/;
+const AGENT_TYPE_RE = /\b(claude|codex|gemini|hermes)\b/;
 const clean = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 
 function parseVoice(transcript) {
@@ -268,7 +271,10 @@ function parseVoice(transcript) {
   if (!tokens.length) return null;
 
   const phrase = tokens.join(' ').toLowerCase();
-  if (SPAWN_VERB.test(phrase) && SPAWN_NOUN.test(phrase)) return { global: 'spawn' };
+  if (SPAWN_VERB.test(phrase) && SPAWN_NOUN.test(phrase)) {
+    const m = phrase.match(AGENT_TYPE_RE);
+    return { global: 'spawn', agentType: m ? m[1] : 'claude' };
+  }
 
   const head = clean(tokens[0]);
   let target;
@@ -287,8 +293,8 @@ function routeVoice(parsed, transcript) {
   if (!parsed) return;
   if (parsed.global === 'spawn') {
     pendingSpawnAnnounce = true;
-    send({ type: 'spawn' });
-    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new agent…</span>`);
+    send({ type: 'spawn', agentType: parsed.agentType });
+    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new ${parsed.agentType} agent…</span>`);
     return;
   }
   if (parsed.error) {

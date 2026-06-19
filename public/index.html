@@ -25,7 +25,13 @@
       <select id="micSelect" class="micsel" title="Microphone input">
         <option value="">🎤 default mic</option>
       </select>
-      <button id="addBtn" class="btn" title="Spawn a new Claude agent">+ Add agent</button>
+      <select id="agentType" class="typesel" title="Agent type to spawn">
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+        <option value="gemini">gemini</option>
+        <option value="hermes">hermes</option>
+      </select>
+      <button id="addBtn" class="btn" title="Spawn a new agent of the selected type">+ Add</button>
       <button id="micBtn" class="btn mic" title="Toggle voice control">
         <span class="dot"></span><span class="label">Listen</span>
       </button>
@@ -38,8 +44,9 @@
   <main id="fleet">
     <div id="empty" class="empty">
       <h1>No agents yet</h1>
-      <p>Click <b>+ Add agent</b> to launch a Claude terminal. Each starts with
-         <code>--dangerously-skip-permissions --effort max</code> and gets a call sign
+      <p>Pick a type and click <b>+ Add</b> — or say <i>“new claude terminal”</i>,
+         <i>“new gemini terminal”</i>, <i>“new hermes terminal”</i>… Claude starts in
+         <code>--permission-mode auto --effort max</code> and each gets a call sign
          like <b>jack</b> or <b>zulu</b>.</p>
       <p class="hint">Then hit <b>🎙 Listen</b> and say
          <i>“jack, build a todo app”</i> or <i>“everyone, commit your work”</i>.</p>
@@ -52,6 +59,7 @@
       <header class="card-bar">
         <span class="status"></span>
         <span class="name"></span>
+        <span class="type"></span>
         <span class="cwd"></span>
         <span class="spacer"></span>
         <button class="ctl interrupt" title="Interrupt (Ctrl-C)">stop</button>

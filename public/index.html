@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>cnos — Claude agent fleet</title>
+  <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header id="bar">
+    <div class="brand">
+      <span class="logo">cnos</span>
+      <span class="tag">command your fleet</span>
+    </div>
+
+    <form id="cmdForm" class="cmd">
+      <select id="target" title="Who to send to"></select>
+      <input id="cmdInput" type="text" autocomplete="off"
+             placeholder="Type a command, then Enter — e.g. “build a login page”" />
+      <button type="submit" class="send">Send</button>
+    </form>
+
+    <div class="actions">
+      <select id="micSelect" class="micsel" title="Microphone input">
+        <option value="">🎤 default mic</option>
+      </select>
+      <button id="addBtn" class="btn" title="Spawn a new Claude agent">+ Add agent</button>
+      <button id="micBtn" class="btn mic" title="Toggle voice control">
+        <span class="dot"></span><span class="label">Listen</span>
+      </button>
+      <button id="diagToggle" class="btn icon" title="Voice diagnostics (mic level + log)">🔎</button>
+    </div>
+  </header>
+
+  <div id="heard" class="heard" hidden></div>
+
+  <main id="fleet">
+    <div id="empty" class="empty">
+      <h1>No agents yet</h1>
+      <p>Click <b>+ Add agent</b> to launch a Claude terminal. Each starts with
+         <code>--dangerously-skip-permissions --effort max</code> and gets a call sign
+         like <b>jack</b> or <b>zulu</b>.</p>
+      <p class="hint">Then hit <b>🎙 Listen</b> and say
+         <i>“jack, build a todo app”</i> or <i>“everyone, commit your work”</i>.</p>
+    </div>
+  </main>
+
+  <!-- Card template -->
+  <template id="card-tpl">
+    <section class="card">
+      <header class="card-bar">
+        <span class="status"></span>
+        <span class="name"></span>
+        <span class="cwd"></span>
+        <span class="spacer"></span>
+        <button class="ctl interrupt" title="Interrupt (Ctrl-C)">stop</button>
+        <button class="ctl enter" title="Press Enter">⏎</button>
+        <button class="ctl kill" title="Kill agent">✕</button>
+      </header>
+      <div class="term"></div>
+    </section>
+  </template>
+
+  <script src="/vendor/xterm/xterm.js"></script>
+  <script src="/vendor/addon-fit/addon-fit.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

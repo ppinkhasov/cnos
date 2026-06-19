@@ -1,6 +1,6 @@
 # cnos
 
-Your own [cnvs.dev](https://cnvs.dev): command a fleet of AI coding agents with your voice.
+Your own command a fleet of AI coding agents with your voice.
 
 cnos launches a grid of real agent terminals — **claude, codex, gemini, hermes** —
 each with its own call sign (`jack`, `zulu`, `echo`, …) — and lets you orchestrate

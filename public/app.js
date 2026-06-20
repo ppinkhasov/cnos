@@ -120,6 +120,7 @@ function dispatch(msg) {
     case 'list':    syncList(msg.terminals); break;
     case 'spawned':
       ensureCard(msg);
+      setTimeout(() => refreshUsage(true), 8000); // a fresh agent run refreshes its token/snapshot
       if (pendingSpawnAnnounce) {
         pendingSpawnAnnounce = false;
         note(`new ${escapeHtml(msg.agentType || 'agent')} <b>${escapeHtml(msg.name)}</b> ready — say “<b>${escapeHtml(msg.name)}</b>, …”`);
@@ -255,7 +256,7 @@ document.getElementById('addBtn').onclick = () => send({ type: 'spawn', agentTyp
 const BROADCAST = new Set(['everyone', 'all', 'team', 'fleet', 'everybody', 'guys']);
 const FILLER    = new Set(['hey', 'ok', 'okay', 'yo', 'hi', 'hello', 'please', 'now', 'so', 'um', 'uh']);
 const CONTROL = {
-  interrupt: ['stop', 'cancel', 'abort', 'interrupt', 'stopit', 'cancelthat', 'nevermind'],
+  interrupt: ['stop', 'stopit', 'stopthat', 'stopnow', 'stopplease', 'halt', 'cancel', 'cancelthat', 'abort', 'interrupt', 'nevermind', 'pause', 'wait', 'holdon'],
   escape:    ['escape', 'dismiss', 'goback'],
   enter:     ['enter', 'submit', 'send', 'sendit', 'go', 'run', 'runit', 'doit', 'confirm', 'yes', 'proceed'],
 };
@@ -303,8 +304,13 @@ function routeVoice(parsed, transcript) {
   }
   TargetEl.value = parsed.target;              // reflect target in the bar
   if (parsed.select) { note(`heard <b>${escapeHtml(transcript)}</b> → ${routeLabel(parsed.target)} is now the target`); return; }
-  if (parsed.control) send({ type: 'control', target: parsed.target, action: parsed.control });
-  else send({ type: 'command', target: parsed.target, text: parsed.text });
+  if (parsed.control) {
+    send({ type: 'control', target: parsed.target, action: parsed.control });
+    const verb = parsed.control === 'interrupt' ? 'stop' : parsed.control;
+    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">⏹ ${routeLabel(parsed.target)} ${verb}</span>`);
+    return;
+  }
+  send({ type: 'command', target: parsed.target, text: parsed.text });
   note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">${routeLabel(parsed.target)}</span>`);
 }
 
@@ -489,5 +495,68 @@ function stopListening() {
   setMic('off', 'Listen');
   note('voice off — click Listen to resume');
 }
+
+// ---- Usage meter (top bar) --------------------------------------------------
+// Polls /api/usage and renders a per-provider utilization strip. Read-only:
+// the server reads each CLI's existing creds/logs and never modifies them.
+const UsageEl = document.getElementById('usage');
+const WIN_LABEL = { '5h': '5h', '7d': '7d', '7d_opus': 'opus' };
+
+const lvlClass = (p) => (p >= 80 ? 'lvl-hot' : p >= 50 ? 'lvl-warn' : 'lvl-ok');
+
+function fmtReset(iso) {
+  const ms = Date.parse(iso) - Date.now();
+  if (Number.isNaN(ms)) return '';
+  if (ms <= 0) return 'window has since reset';
+  const h = Math.floor(ms / 3.6e6), m = Math.round((ms % 3.6e6) / 6e4);
+  return h >= 1 ? `resets in ${h}h ${m}m` : `resets in ${m}m`;
+}
+function fmtAsOf(iso) {
+  const t = Date.parse(iso); if (Number.isNaN(t)) return '';
+  return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function renderUsage(data) {
+  const providers = data?.providers || [];
+  UsageEl.innerHTML = providers.map((p) => {
+    const cls = ['usage-chip'];
+    if (!p.available) cls.push('off');
+    else if (!p.live) cls.push('stale');
+
+    let inner = `<span class="usage-name">${escapeHtml(p.label)}</span>`;
+    if (p.available && p.windows?.length) {
+      inner += p.windows.map((w) => {
+        const pct = Math.round(w.usedPercent);
+        const L = lvlClass(pct);
+        const tip = `${w.label}${w.resetsAt ? ' · ' + fmtReset(w.resetsAt) : ''}`;
+        return `<span class="usage-win" title="${escapeHtml(tip)}">`
+          + `<span class="lab">${escapeHtml(WIN_LABEL[w.key] || w.key)}</span>`
+          + `<span class="usage-bar ${L}"><i style="width:${pct}%"></i></span>`
+          + `<span class="usage-pct ${L}">${pct}%</span></span>`;
+      }).join('');
+      inner += p.live
+        ? `<span class="usage-live" title="live from the usage API">● live</span>`
+        : (p.asOf ? `<span class="usage-meta">as of ${escapeHtml(fmtAsOf(p.asOf))}</span>` : '');
+    } else {
+      inner += `<span class="usage-na">${escapeHtml(p.reason || 'unavailable')}</span>`;
+    }
+    const chipTip = p.planType ? `${p.label} · ${p.planType} plan` : p.label;
+    return `<div class="${cls.join(' ')}" data-provider="${escapeHtml(p.id)}" title="${escapeHtml(chipTip)}">${inner}</div>`;
+  }).join('');
+}
+
+async function refreshUsage(force) {
+  try {
+    const r = await fetch('/api/usage' + (force ? '?force=1' : ''));
+    if (r.ok) renderUsage(await r.json());
+  } catch { /* keep last render */ }
+}
+
+UsageEl.addEventListener('click', () => {
+  UsageEl.style.opacity = '0.5';
+  refreshUsage(true).finally(() => { UsageEl.style.opacity = ''; });
+});
+refreshUsage();
+setInterval(() => refreshUsage(), 60_000);
 
 connect();

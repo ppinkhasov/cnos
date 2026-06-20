@@ -15,6 +15,7 @@ import os from 'os';
 import fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { getUsage } from './usage.js';
 
 const execFileP = promisify(execFile);
 
@@ -192,7 +193,9 @@ function write(term, data) {
   }
 }
 
-const CONTROL_SEQ = { interrupt: '\x03', escape: '\x1b', enter: '\r' };
+// "stop"/interrupt sends Esc — the key these agent TUIs (claude/gemini/codex)
+// use to interrupt the current task. Ctrl-C tends to quit the program instead.
+const CONTROL_SEQ = { interrupt: '\x1b', escape: '\x1b', enter: '\r' };
 
 function handle(ws, msg) {
   switch (msg.type) {
@@ -264,6 +267,16 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xterm/xterm/lib')));
 app.use('/vendor/xterm-css', express.static(path.join(__dirname, 'node_modules/@xterm/xterm/css')));
 app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit/lib')));
+
+// Per-provider API usage (rate-limit utilization) for the top-bar meter.
+// Read-only: reads each CLI's existing creds/logs, never writes them. Cached.
+app.get('/api/usage', async (req, res) => {
+  try {
+    res.json(await getUsage({ force: req.query.force === '1' }));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 // Transcribe a short audio clip with local whisper.cpp. The browser records the
 // utterance (getUserMedia + MediaRecorder) and POSTs it here as raw audio bytes.

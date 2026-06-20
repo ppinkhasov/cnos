@@ -54,7 +54,7 @@ message. Override any type with `CNOS_<TYPE>_BIN` and `CNOS_<TYPE>_ARGS`.
 
 ```
 [hey] <agent|everyone> <command…>
-[hey] <agent|everyone> stop|cancel              → interrupt (Ctrl-C)
+[hey] <agent|everyone> stop|cancel|pause         → stop the current task (Esc)
 [hey] <agent|everyone> enter|go|submit           → just press Enter
 new|add|spawn <claude|codex|gemini|hermes> …     → launch that agent type
 ```
@@ -76,6 +76,25 @@ records the clip, and transcribes it with Whisper.
 
 Examples: `CNOS_WORKDIR=~/dev/myrepo npm start` ·
 `CNOS_CLAUDE_ARGS="--permission-mode acceptEdits --effort high" npm start`
+
+## Usage meter
+
+A strip under the top bar shows, per provider, how much of your rate-limit
+budget you've used — the **5-hour** session window and the **weekly** window — as
+live mini-meters (green → amber → red). It polls `GET /api/usage` every 60s;
+click the strip to refresh now. Everything is **read-only**: the server reads
+each CLI's existing credentials/logs and never modifies them.
+
+| Provider | Source                                            | Freshness                                   |
+| -------- | ------------------------------------------------- | ------------------------------------------- |
+| `claude` | `GET /api/oauth/usage` (your Claude OAuth token)  | **live** while the token is valid           |
+| `codex`  | newest `~/.codex/sessions` rollout snapshot       | last Codex API call (shown "as of …")       |
+| `gemini` | —                                                 | free OAuth tier exposes no utilization API  |
+| `hermes` | —                                                 | DeepSeek backend is pay-as-you-go, no window |
+
+The `claude` CLI refreshes its own OAuth token; if it has expired (no Claude
+agent has run for a few hours) the meter says so and goes live again the next
+time a Claude agent runs.
 
 ## How it works
 

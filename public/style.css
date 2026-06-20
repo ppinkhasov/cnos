@@ -139,6 +139,61 @@ body { display: flex; flex-direction: column; }
 .heard .route { color: var(--accent); font-weight: 700; }
 .heard .mut { opacity: 0.65; }
 
+/* ---- Usage meter strip ---- */
+.usage {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  padding: 7px 16px;
+  background: #0e131c;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  cursor: pointer;
+}
+.usage:empty { display: none; }
+.usage-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 10px 4px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.usage-chip.stale { opacity: 0.7; }
+.usage-chip.off { opacity: 0.55; }
+.usage-name {
+  font-weight: 800;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+}
+.usage-chip[data-provider="claude"] .usage-name { color: #d7a36b; }
+.usage-chip[data-provider="codex"]  .usage-name { color: #74e8bd; }
+.usage-chip[data-provider="gemini"] .usage-name { color: #9db4ff; }
+.usage-chip[data-provider="hermes"] .usage-name { color: #d7a9f5; }
+.usage-win { display: flex; align-items: center; gap: 6px; }
+.usage-win .lab { color: var(--muted); font-size: 10.5px; }
+.usage-bar {
+  width: 54px; height: 6px;
+  background: #000;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.usage-bar > i { display: block; height: 100%; width: 0; border-radius: 4px; transition: width 0.4s ease; }
+.usage-pct { font-family: var(--font-mono); font-weight: 700; min-width: 30px; text-align: right; }
+.usage-bar.lvl-ok   > i { background: var(--accent-2); }
+.usage-bar.lvl-warn > i { background: #e6c07b; }
+.usage-bar.lvl-hot  > i { background: var(--danger); }
+.usage-pct.lvl-ok   { color: var(--accent-2); }
+.usage-pct.lvl-warn { color: #e6c07b; }
+.usage-pct.lvl-hot  { color: var(--danger); }
+.usage-na { color: var(--muted); font-style: italic; font-size: 11px; }
+.usage-meta { color: var(--muted); font-size: 10px; }
+.usage-live { color: var(--live); font-size: 9px; }
+
 /* ---- Fleet grid ---- */
 #fleet {
   flex: 1;

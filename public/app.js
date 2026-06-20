@@ -13,6 +13,7 @@ const OrchType    = document.getElementById('orchType');
 const OrchWorkers = document.getElementById('orchWorkers');
 const OrchMax     = document.getElementById('orchMax');
 const OrchRun     = document.getElementById('orchRun');
+const OrchResume  = document.getElementById('orchResume');
 const OrchStatus  = document.getElementById('orchStatus');
 const OrchLoop    = document.getElementById('orchLoop');
 const OrchPhase   = document.getElementById('orchPhase');
@@ -342,13 +343,13 @@ const clampInt = (v, lo, hi, dflt) => {
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
 };
 
-function statusHint(status, running) {
+function statusHint(status, running, resumable) {
   switch (status) {
     case 'briefing': return 'spawning agents and briefing the lead…';
     case 'running':  return 'lead is delegating — agents working…';
     case 'done':     return '✓ goal complete';
-    case 'stopped':  return 'stopped';
-    case 'stalled':  return 'stalled — the lead stopped issuing tasks';
+    case 'stopped':  return resumable ? 'stopped — click Resume to continue (agents are still running)' : 'stopped';
+    case 'stalled':  return resumable ? 'stalled — Resume to retry, or Start fresh' : 'stalled — the lead stopped issuing tasks';
     case 'error':    return 'error — see the activity feed';
     default:         return running ? 'running…' : 'set a goal, then Start — spawns a lead + workers and runs the loop';
   }
@@ -369,7 +370,7 @@ function renderFleet(fleet) {
   }).join('') || '<div class="of-empty">no agents yet</div>';
 }
 
-const FEED_ICON = { start: '▶', plan: '📋', assign: '➡', lead: '🧠', done: '✓', spawn: '＋',
+const FEED_ICON = { start: '▶', resume: '↻', plan: '📋', assign: '➡', lead: '🧠', done: '✓', spawn: '＋',
                     note: '·', warn: '⚠', stalled: '■', stopped: '■', error: '✕' };
 function renderFeed(log) {
   // newest first
@@ -396,9 +397,17 @@ function renderOrchestration() {
   if (ae !== OrchMax && orchState.maxAgents) OrchMax.value = orchState.maxAgents;
   for (const el of [OrchGoal, OrchType, OrchWorkers, OrchMax]) el.disabled = running; // lock while running
 
-  OrchRun.textContent = running ? '■ Stop' : '▶ Start';
-  OrchRun.classList.toggle('stop', running);
-  OrchStatus.textContent = statusHint(orchState.status, running);
+  // Three button states: Stop (running) · Resume + Start-fresh (stopped, agents alive) · Start (idle)
+  const resumable = !!orchState.resumable;
+  OrchResume.hidden = !resumable;
+  if (running) {
+    OrchRun.textContent = '■ Stop'; OrchRun.classList.toggle('stop', true); OrchRun.classList.toggle('ghost', false);
+  } else if (resumable) {
+    OrchRun.textContent = '↻ Start fresh'; OrchRun.classList.toggle('stop', false); OrchRun.classList.toggle('ghost', true);
+  } else {
+    OrchRun.textContent = '▶ Start'; OrchRun.classList.toggle('stop', false); OrchRun.classList.toggle('ghost', false);
+  }
+  OrchStatus.textContent = statusHint(orchState.status, running, resumable);
 
   const fleet = orchState.fleet || [], log = orchState.log || [];
   const show = running || fleet.length || log.length;
@@ -427,6 +436,8 @@ OrchRun.onclick = () => {
     startWorkers: clampInt(OrchWorkers.value, 1, 12, 3),
     maxAgents: clampInt(OrchMax.value, 2, 16, 8) });
 };
+
+OrchResume.onclick = () => send({ type: 'orchestrate-resume' });
 
 // Persist config edits so every open tab shares one setup (server ignores while running).
 function pushOrchConfig() {

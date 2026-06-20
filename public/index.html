@@ -83,6 +83,8 @@
       </label>
       <label class="orch-field">Workers <input id="orchWorkers" type="number" min="1" max="12" value="3" /></label>
       <label class="orch-field">Max <input id="orchMax" type="number" min="2" max="16" value="8" /></label>
+      <button id="orchResume" class="btn orch-run" type="button" hidden
+              title="Resume the run where it left off — the agents kept working while it was stopped">▶ Resume</button>
       <button id="orchRun" class="btn orch-run" type="button"
               title="Spawn a lead agent + workers and run the goal loop until the lead declares it done">▶ Start</button>
       <span id="orchStatus" class="orch-status">set a goal, then Start — spawns a lead + workers and runs the loop</span>

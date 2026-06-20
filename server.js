@@ -29,8 +29,12 @@ const WORKDIR = process.env.CNOS_WORKDIR || os.homedir();
 // CNOS_<TYPE>_BIN and CNOS_<TYPE>_ARGS (e.g. CNOS_CLAUDE_ARGS="--effort high").
 const AGENT_DEFAULTS = {
   claude: { bin: 'claude', args: ['--permission-mode', 'auto', '--effort', 'max'] },
-  codex:  { bin: 'codex',  args: ['--full-auto'] },
-  gemini: { bin: 'gemini', args: ['--approval-mode', 'auto_edit'] },
+  // codex 0.140+ removed `--full-auto`; its modern equivalent is an explicit
+  // sandbox + approval policy. workspace-write + on-request = edit/run inside the
+  // workdir without prompting, only escalate when the model asks — "auto", NOT
+  // full bypass (parity with claude's `--permission-mode auto`). For unattended
+  // runs override with CNOS_CODEX_ARGS="--sandbox danger-full-access --ask-for-approval never".
+  codex:  { bin: 'codex',  args: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'] },
   hermes: { bin: 'hermes', args: [] },
 };
 const DEFAULT_AGENT = 'claude';
@@ -193,9 +197,12 @@ function write(term, data) {
   }
 }
 
-// "stop"/interrupt sends Esc — the key these agent TUIs (claude/gemini/codex)
-// use to interrupt the current task. Ctrl-C tends to quit the program instead.
-const CONTROL_SEQ = { interrupt: '\x1b', escape: '\x1b', enter: '\r' };
+// "stop"/interrupt sends Esc — the key agent TUIs use to interrupt the current
+// task. Ctrl-C tends to quit the program instead.
+// "clear" wipes the typed-but-unsubmitted input line: Ctrl-E (jump to end of
+// line) then Ctrl-U (kill to line start), so the whole line goes regardless of
+// where the cursor sits. Ctrl-C is avoided here too (it would quit the agent).
+const CONTROL_SEQ = { interrupt: '\x1b', escape: '\x1b', enter: '\r', clear: '\x05\x15' };
 
 function handle(ws, msg) {
   switch (msg.type) {
@@ -219,7 +226,7 @@ function handle(ws, msg) {
       break;
     }
 
-    case 'control': { // interrupt / escape / enter, routed
+    case 'control': { // interrupt / escape / enter / clear, routed
       const seq = CONTROL_SEQ[msg.action];
       if (!seq) break;
       const list = resolveTargets(msg.target);

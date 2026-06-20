@@ -35,6 +35,7 @@
       <input id="cmdInput" type="text" autocomplete="off"
              placeholder="Type a command, then Enter — e.g. “build a login page”" />
       <button type="submit" class="send">Send</button>
+      <button type="button" id="clearBtn" class="btn" title="Clear typed-but-unsent input for the selected target (works with “everyone”)">🧹 Clear</button>
     </form>
 
     <div class="actions">
@@ -44,7 +45,6 @@
       <select id="agentType" class="typesel" title="Agent type to spawn">
         <option value="claude">claude</option>
         <option value="codex">codex</option>
-        <option value="gemini">gemini</option>
         <option value="hermes">hermes</option>
       </select>
       <button id="addBtn" class="btn" title="Spawn a new agent of the selected type">+ Add</button>
@@ -62,8 +62,8 @@
   <main id="fleet">
     <div id="empty" class="empty">
       <h1>No agents yet</h1>
-      <p>Pick a type and click <b>+ Add</b> — or say <i>“new claude terminal”</i>,
-         <i>“new gemini terminal”</i>, <i>“new hermes terminal”</i>… Claude starts in
+      <p>Pick a type and click <b>+ Add</b> — or say <i>“new claude terminal”</i>
+         or <i>“new hermes terminal”</i>… Claude starts in
          <code>--permission-mode auto --effort max</code> and each gets a call sign
          like <b>jack</b> or <b>zulu</b>.</p>
       <p class="hint">Then hit <b>🎙 Listen</b> and say
@@ -81,6 +81,7 @@
         <span class="cwd"></span>
         <span class="spacer"></span>
         <button class="ctl interrupt" title="Stop the current task (Esc)">stop</button>
+        <button class="ctl clear" title="Clear typed-but-unsent input (Ctrl-U)">🧹</button>
         <button class="ctl enter" title="Press Enter">⏎</button>
         <button class="ctl kill" title="Kill agent">✕</button>
       </header>

@@ -2,7 +2,7 @@
 
 Your own command a fleet of AI coding agents with your voice.
 
-cnos launches a grid of real agent terminals — **claude, codex, gemini, hermes** —
+cnos launches a grid of real agent terminals — **claude, codex, hermes** —
 each with its own call sign (`jack`, `zulu`, `echo`, …) — and lets you orchestrate
 them by voice or text. Claude starts in **auto mode** with **max effort**:
 
@@ -28,13 +28,13 @@ npm start
 
 Then open **http://localhost:4173 in Chrome**.
 
-1. Pick a type in the top bar and click **+ Add** — or say *“new claude terminal”*,
-   *“new gemini terminal”*, *“new hermes terminal”*… Each agent gets a call sign.
+1. Pick a type in the top bar and click **+ Add** — or say *“new claude terminal”*
+   or *“new hermes terminal”*… Each agent gets a call sign.
 2. Voice **auto-starts** — allow the mic once. Pick your input from the **🎤 selector**
    in the top bar (toggle the **🔎** panel for a live level meter + log). Then talk:
    - *“jack, build a todo app in react”* → routed to **jack**
    - *“everyone, commit your work”* → broadcast to **all** agents
-   - *“new gemini terminal”* → spawns a Gemini agent
+   - *“new codex terminal”* → spawns a Codex agent
    - *“jack, stop”* → interrupts jack (Ctrl-C)
 3. Or use the command bar at the top, or just click a terminal and type.
 
@@ -50,8 +50,7 @@ still works when you open cnos on the host machine itself.
 | Type     | Launches                              | Auto mode                |
 | -------- | ------------------------------------- | ------------------------ |
 | `claude` | `claude --permission-mode auto --effort max` | auto-accept edits |
-| `codex`  | `codex --full-auto`                   | full-auto                |
-| `gemini` | `gemini --approval-mode auto_edit`    | auto-approve edits       |
+| `codex`  | `codex --sandbox workspace-write --ask-for-approval on-request` | auto (workspace-write) |
 | `hermes` | `hermes`                              | —                        |
 
 Only the CLIs you have installed will launch; others report a clear "not installed"
@@ -62,8 +61,9 @@ message. Override any type with `CNOS_<TYPE>_BIN` and `CNOS_<TYPE>_ARGS`.
 ```
 [hey] <agent|everyone> <command…>
 [hey] <agent|everyone> stop|cancel|pause         → stop the current task (Esc)
+[hey] <agent|everyone> clear|erase|scratch that  → wipe typed-but-unsent input
 [hey] <agent|everyone> enter|go|submit           → just press Enter
-new|add|spawn <claude|codex|gemini|hermes> …     → launch that agent type
+new|add|spawn <claude|codex|hermes> …            → launch that agent type
 ```
 
 The first word is the target. `everyone`, `all`, `team`, `fleet` broadcast.
@@ -76,8 +76,9 @@ records the clip, and transcribes it with Whisper.
 | --------------------- | ----------------------------------------- | ------------------------------------ |
 | `PORT`                | `4173`                                    | HTTP/WebSocket port                  |
 | `CNOS_WORKDIR`        | your home dir                             | default working dir for agents       |
-| `CNOS_<TYPE>_BIN`     | the CLI name (`claude`, `gemini`, …)      | path to that agent's CLI             |
+| `CNOS_<TYPE>_BIN`     | the CLI name (`claude`, `codex`, …)       | path to that agent's CLI             |
 | `CNOS_<TYPE>_ARGS`    | per-type auto-mode flags (see table)      | flags that agent type launches with  |
+| `DEEPSEEK_API_KEY`    | `~/.hermes/.env` fallback                 | DeepSeek balance API credential      |
 | `CNOS_WHISPER_BIN`    | auto (`whisper-cli`)                      | path to the whisper.cpp binary       |
 | `CNOS_WHISPER_MODEL`  | `models/ggml-base.en.bin`                 | Whisper model file                   |
 
@@ -86,9 +87,8 @@ Examples: `CNOS_WORKDIR=~/dev/myrepo npm start` ·
 
 ## Usage meter
 
-A strip under the top bar shows, per provider, how much of your rate-limit
-budget you've used — the **5-hour** session window and the **weekly** window — as
-live mini-meters (green → amber → red). It polls `GET /api/usage` every 60s;
+A strip under the top bar shows each subscription provider's rate-limit windows
+and the total DeepSeek API credit balance available. It polls `GET /api/usage` every 60s;
 click the strip to refresh now. Everything is **read-only**: the server reads
 each CLI's existing credentials/logs and never modifies them.
 
@@ -96,8 +96,7 @@ each CLI's existing credentials/logs and never modifies them.
 | -------- | ------------------------------------------------- | ------------------------------------------- |
 | `claude` | `GET /api/oauth/usage` (your Claude OAuth token)  | **live** while the token is valid           |
 | `codex`  | newest `~/.codex/sessions` rollout snapshot       | last Codex API call (shown "as of …")       |
-| `gemini` | —                                                 | free OAuth tier exposes no utilization API  |
-| `hermes` | —                                                 | DeepSeek backend is pay-as-you-go, no window |
+| `deepseek` | `GET /user/balance` (`DEEPSEEK_API_KEY`)       | **live** total available credit balance     |
 
 The `claude` CLI refreshes its own OAuth token; if it has expired (no Claude
 agent has run for a few hours) the meter says so and goes live again the next
@@ -114,7 +113,7 @@ Browser  ── xterm.js grid ──────────────── W
                                               ffmpeg + whisper.cpp   node-pty
                                                   (transcribe)         │
                                                                        ▼
-                                          claude / codex / gemini / hermes  (×N)
+                                                claude / codex / hermes  (×N)
 ```
 
 The Node server owns the PTYs and transcription; the browser captures audio and

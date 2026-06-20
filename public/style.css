@@ -172,8 +172,8 @@ body { display: flex; flex-direction: column; }
 }
 .usage-chip[data-provider="claude"] .usage-name { color: #d7a36b; }
 .usage-chip[data-provider="codex"]  .usage-name { color: #74e8bd; }
-.usage-chip[data-provider="gemini"] .usage-name { color: #9db4ff; }
-.usage-chip[data-provider="hermes"] .usage-name { color: #d7a9f5; }
+.usage-chip[data-provider="deepseek"] .usage-name { color: #d7a9f5; }
+.usage-balance { color: var(--accent-2); font-family: var(--font-mono); font-weight: 800; }
 .usage-win { display: flex; align-items: center; gap: 6px; }
 .usage-win .lab { color: var(--muted); font-size: 10.5px; }
 .usage-bar {
@@ -196,13 +196,16 @@ body { display: flex; flex-direction: column; }
 
 /* ---- Fleet grid ---- */
 #fleet {
+  --card-height: 528px;
   flex: 1;
   overflow: auto;
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
+  grid-auto-rows: var(--card-height);
   gap: 12px;
   padding: 12px;
   align-content: start;
+  align-items: start;
 }
 
 .empty {
@@ -230,8 +233,11 @@ body { display: flex; flex-direction: column; }
   border: 1px solid var(--line);
   border-radius: 12px;
   overflow: hidden;
-  height: 380px;
+  height: var(--card-height);
   transition: border-color 0.15s, box-shadow 0.15s;
+}
+.card.fills-column {
+  height: max(var(--card-height), var(--available-height));
 }
 .card.routed { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124, 156, 255, 0.4); }
 .card.exited { opacity: 0.55; }
@@ -268,7 +274,6 @@ body { display: flex; flex-direction: column; }
 }
 .card-bar .type[data-type="claude"] { color: #d7a36b; border-color: #5a4630; }
 .card-bar .type[data-type="codex"]  { color: #74e8bd; border-color: #2e5546; }
-.card-bar .type[data-type="gemini"] { color: #9db4ff; border-color: #34406a; }
 .card-bar .type[data-type="hermes"] { color: #d7a9f5; border-color: #4a3a5e; }
 .card-bar .cwd {
   font-size: 11px;
@@ -403,12 +408,12 @@ html.mobile .term { -webkit-overflow-scrolling: touch; }
   #usage, .heard { padding-left: 10px; padding-right: 10px; }
 
   #fleet {
+    --card-height: clamp(300px, 62vh, 560px);
     grid-template-columns: 1fr;                    /* one agent per row */
     gap: 10px;
     padding: 10px;
     padding-bottom: max(10px, env(safe-area-inset-bottom));
   }
-  .card { height: 62vh; min-height: 300px; max-height: 560px; }
   .card-bar .cwd { max-width: 110px; }
 
   #diag { left: 8px; right: 8px; bottom: 8px; width: auto; }

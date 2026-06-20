@@ -20,6 +20,44 @@ const TERM_THEME = {
 const agents = new Map();
 let ws = null;
 let pendingSpawnAnnounce = false; // set when a spawn was requested by voice
+let fleetLayoutFrame = 0;
+
+function queueFleetLayout() {
+  if (fleetLayoutFrame) return;
+  fleetLayoutFrame = requestAnimationFrame(() => {
+    fleetLayoutFrame = 0;
+    layoutFleetCards();
+  });
+}
+
+// A grid row keeps its normal height so a tall card does not push terminals in
+// neighboring columns downward. The last card in each visual column can then
+// safely use any otherwise-empty space beneath it.
+function layoutFleetCards() {
+  const cards = [...FleetEl.querySelectorAll('.card')];
+  for (const card of cards) {
+    card.classList.remove('fills-column');
+    card.style.removeProperty('--available-height');
+  }
+  if (!cards.length) return;
+
+  const firstTop = cards[0].offsetTop;
+  let columns = 0;
+  while (columns < cards.length && Math.abs(cards[columns].offsetTop - firstTop) < 2) columns++;
+
+  const fleetRect = FleetEl.getBoundingClientRect();
+  const paddingBottom = parseFloat(getComputedStyle(FleetEl).paddingBottom) || 0;
+  const contentTops = cards.map((card) => card.getBoundingClientRect().top - fleetRect.top + FleetEl.scrollTop);
+
+  cards.forEach((card, index) => {
+    if (index + columns < cards.length) return;
+    const available = Math.max(0, FleetEl.clientHeight - contentTops[index] - paddingBottom);
+    card.style.setProperty('--available-height', `${Math.floor(available)}px`);
+    card.classList.add('fills-column');
+  });
+}
+
+new ResizeObserver(queueFleetLayout).observe(FleetEl);
 
 // ---- On-page voice diagnostics (so we never need DevTools) ------------------
 const diagStatic = {
@@ -178,10 +216,12 @@ function ensureCard({ id, name, agentType, cwd }) {
   agents.set(id, a);
 
   el.querySelector('.interrupt').onclick = () => send({ type: 'control', target: name, action: 'interrupt' });
+  el.querySelector('.clear').onclick     = () => send({ type: 'control', target: name, action: 'clear' });
   el.querySelector('.enter').onclick     = () => send({ type: 'control', target: name, action: 'enter' });
   el.querySelector('.kill').onclick      = () => send({ type: 'kill', id });
 
   FleetEl.appendChild(el);
+  queueFleetLayout();
   paintHeader(a);
   requestAnimationFrame(doFit);
   refreshTargets();
@@ -214,6 +254,7 @@ function destroyCard(a, immediate) {
   try { a.ro.disconnect(); } catch {}
   try { a.term.dispose(); } catch {}
   a.el.remove();
+  queueFleetLayout();
 }
 
 function updateEmpty() { EmptyEl.hidden = agents.size > 0; }
@@ -254,6 +295,10 @@ document.getElementById('cmdForm').addEventListener('submit', (e) => {
 
 document.getElementById('addBtn').onclick = () => send({ type: 'spawn', agentType: document.getElementById('agentType').value });
 
+// Clear the typed-but-unsent input for whoever's selected in the target bar
+// (the default "▶ everyone" → all agents). Mirrors saying "everyone, clear".
+document.getElementById('clearBtn').onclick = () => send({ type: 'control', target: TargetEl.value, action: 'clear' });
+
 // ---- Voice control ----------------------------------------------------------
 const BROADCAST = new Set(['everyone', 'all', 'team', 'fleet', 'everybody', 'guys']);
 const FILLER    = new Set(['hey', 'ok', 'okay', 'yo', 'hi', 'hello', 'please', 'now', 'so', 'um', 'uh']);
@@ -261,14 +306,26 @@ const CONTROL = {
   interrupt: ['stop', 'stopit', 'stopthat', 'stopnow', 'stopplease', 'halt', 'cancel', 'cancelthat', 'abort', 'interrupt', 'nevermind', 'pause', 'wait', 'holdon'],
   escape:    ['escape', 'dismiss', 'goback'],
   enter:     ['enter', 'submit', 'send', 'sendit', 'go', 'run', 'runit', 'doit', 'confirm', 'yes', 'proceed'],
+  clear:     ['clear', 'clearit', 'clearthat', 'clearinput', 'cleartext', 'cleartheinput', 'clearthetext', 'clearthecommand', 'erase', 'erasethat', 'erasethis', 'wipe', 'wipethat', 'wipeit', 'scratchthat', 'discard', 'discardthat', 'deletethat'],
 };
 // "new terminal" / "add an agent" / "spawn a cli" → launch a new agent (no target needed)
 const SPAWN_VERB = /^(new|add|create|spawn|launch|open|start|another)\b/;
-const SPAWN_NOUN = /\b(terminal|terminals|agent|agents|cli|claude|codex|gemini|hermes|window|windows|bot|instance|session)\b/;
-const AGENT_TYPE_RE = /\b(claude|codex|gemini|hermes)\b/;
+const SPAWN_NOUN = /\b(terminal|terminals|agent|agents|cli|claude|codex|hermes|window|windows|bot|instance|session)\b/;
+const AGENT_TYPE_RE = /\b(claude|codex|hermes)\b/;
 const clean = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+// The TTS hook (tts-notify.py) prefixes every spoken line with "<Callsign> says, ".
+// This matches that lead-in so we can discard the fleet's own voice if the mic
+// catches it — the one signature no real spoken command ever has.
+const TTS_ECHO_RE = /^\s*[a-z][a-z0-9-]*\s*,?\s+says\b/i;
 
 function parseVoice(transcript) {
+  // Drop the fleet's own TTS heard back through the mic. The speak hook announces
+  // output as "<Callsign> says, <text>"; if the half-duplex mute has any gap (TTS
+  // startup lag, a dropped /api/speaking ping, overlapping notifications), Whisper
+  // catches it and we'd route the "<text>" right back to the agent — a self-feeding
+  // loop. No genuine command has "says" as its second word, so treat it as echo.
+  if (TTS_ECHO_RE.test(transcript)) return { echo: transcript };
+
   let tokens = transcript.trim().split(/\s+/).filter(Boolean);
   while (tokens.length && FILLER.has(clean(tokens[0]))) tokens.shift();
   if (!tokens.length) return null;
@@ -294,6 +351,11 @@ function parseVoice(transcript) {
 
 function routeVoice(parsed, transcript) {
   if (!parsed) return;
+  if (parsed.echo) {                 // the agent's own TTS came back through the mic
+    diagLog('🔇 ignored TTS echo: "' + parsed.echo + '"');
+    note('<span class="mut">🔇 ignored agent speech</span>');
+    return;
+  }
   if (parsed.global === 'spawn') {
     pendingSpawnAnnounce = true;
     send({ type: 'spawn', agentType: parsed.agentType });
@@ -308,8 +370,10 @@ function routeVoice(parsed, transcript) {
   if (parsed.select) { note(`heard <b>${escapeHtml(transcript)}</b> → ${routeLabel(parsed.target)} is now the target`); return; }
   if (parsed.control) {
     send({ type: 'control', target: parsed.target, action: parsed.control });
-    const verb = parsed.control === 'interrupt' ? 'stop' : parsed.control;
-    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">⏹ ${routeLabel(parsed.target)} ${verb}</span>`);
+    const VERB = { interrupt: 'stop', clear: 'clear input' };
+    const ICON = { clear: '🧹' };
+    const verb = VERB[parsed.control] || parsed.control;
+    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">${ICON[parsed.control] || '⏹'} ${routeLabel(parsed.target)} ${verb}</span>`);
     return;
   }
   send({ type: 'command', target: parsed.target, text: parsed.text });
@@ -546,6 +610,7 @@ function stopListening() {
 // Polls /api/usage and renders a per-provider utilization strip. Read-only:
 // the server reads each CLI's existing creds/logs and never modifies them.
 const UsageEl = document.getElementById('usage');
+const USAGE_PROVIDER_IDS = new Set(['claude', 'codex', 'deepseek']);
 const WIN_LABEL = { '5h': '5h', '7d': '7d', '7d_opus': 'opus' };
 
 const lvlClass = (p) => (p >= 80 ? 'lvl-hot' : p >= 50 ? 'lvl-warn' : 'lvl-ok');
@@ -561,16 +626,28 @@ function fmtAsOf(iso) {
   const t = Date.parse(iso); if (Number.isNaN(t)) return '';
   return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 }
+function fmtCurrency(value, currency) {
+  const amount = Number(value);
+  if (!Number.isFinite(amount)) return `${value} ${currency}`;
+  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount); }
+  catch { return `${amount.toFixed(2)} ${currency}`; }
+}
 
 function renderUsage(data) {
-  const providers = data?.providers || [];
+  const providers = Array.isArray(data?.providers)
+    ? data.providers.filter((p) => USAGE_PROVIDER_IDS.has(p.id))
+    : [];
   UsageEl.innerHTML = providers.map((p) => {
     const cls = ['usage-chip'];
-    if (!p.available) cls.push('off');
+    if (!p.available || p.creditAvailable === false) cls.push('off');
     else if (!p.live) cls.push('stale');
 
     let inner = `<span class="usage-name">${escapeHtml(p.label)}</span>`;
-    if (p.available && p.windows?.length) {
+    if (p.available && p.balances?.length) {
+      inner += p.balances.map((b) =>
+        `<span class="usage-balance" title="Total available balance">${escapeHtml(fmtCurrency(b.total, b.currency))}</span>`
+      ).join('');
+    } else if (p.available && p.windows?.length) {
       inner += p.windows.map((w) => {
         const pct = Math.round(w.usedPercent);
         const L = lvlClass(pct);
@@ -582,7 +659,9 @@ function renderUsage(data) {
       }).join('');
       inner += p.live
         ? `<span class="usage-live" title="live from the usage API">● live</span>`
-        : (p.asOf ? `<span class="usage-meta">as of ${escapeHtml(fmtAsOf(p.asOf))}</span>` : '');
+        : (p.asOf
+            ? `<span class="usage-meta" title="${escapeHtml(p.reason || 'cached snapshot')}">as of ${escapeHtml(fmtAsOf(p.asOf))}</span>`
+            : (p.reason ? `<span class="usage-meta" title="${escapeHtml(p.reason)}">${escapeHtml(p.reason)}</span>` : ''));
     } else {
       inner += `<span class="usage-na">${escapeHtml(p.reason || 'unavailable')}</span>`;
     }

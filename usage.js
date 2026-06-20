@@ -1,23 +1,34 @@
 // cnos — per-provider API usage (rate-limit utilization) for the dashboard meter.
 //
 // Read-only by design: we read whatever credentials/logs each CLI already wrote
-// and NEVER write them back. Each provider returns either live or last-known
-// utilization for its rate-limit windows (e.g. a 5-hour session limit and a
-// weekly limit), or an honest "unavailable" with a reason.
+// and NEVER write them back. Providers return rate-limit utilization, a credit
+// balance, or an honest "unavailable" with a reason.
 //
 //   Claude  — live  : GET https://api.anthropic.com/api/oauth/usage (OAuth token)
 //   Codex   — cached: newest ~/.codex/sessions rollout's rate_limits snapshot
-//   Gemini  — n/a   : free OAuth tier exposes no utilization API
-//   Hermes  — n/a   : DeepSeek backend is pay-as-you-go, no rate-limit window
+//   DeepSeek — live  : GET https://api.deepseek.com/user/balance (API key)
 
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { execFileSync } from 'child_process';
 
 const HOME = os.homedir();
 
 const readJson = (p) => { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } };
 const exists = (p) => { try { fs.accessSync(p); return true; } catch { return false; } };
+
+function readEnvValue(file, key) {
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  const match = text.match(new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=\\s*(.*?)\\s*$`, 'm'));
+  if (!match) return null;
+  const value = match[1].trim();
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    return value.slice(1, -1).trim() || null;
+  }
+  return value.replace(/\s+#.*$/, '').trim() || null;
+}
 
 // ---- shared shaping helpers -------------------------------------------------
 
@@ -65,21 +76,79 @@ function windowLabel(minutes, fallback) {
 
 // ---- Claude (live) ----------------------------------------------------------
 
+// Where Claude Code keeps its OAuth credentials differs by OS. On macOS the CLI
+// stores (and refreshes) them in the login Keychain under "Claude Code-credentials";
+// the legacy ~/.claude/.credentials.json copy is frequently stale/expired there.
+// So on darwin read the Keychain first and only fall back to the file. Both hold
+// the same { claudeAiOauth: {...} } shape. The Keychain read can raise a one-time
+// macOS "allow access" prompt for the node process — choose "Always Allow".
+function readClaudeOauth() {
+  if (process.platform === 'darwin') {
+    try {
+      const raw = execFileSync(
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+        { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] },
+      );
+      const o = JSON.parse(raw)?.claudeAiOauth;
+      if (o?.accessToken) return o;
+    } catch { /* not present or access denied — fall back to the file below */ }
+  }
+  return readJson(path.join(HOME, '.claude/.credentials.json'))?.claudeAiOauth || null;
+}
+
+// The usage endpoint is rate-limited PER ACCOUNT, and every Claude Code process
+// signed in with this token polls it too — so a fleet of spawned agents plus this
+// meter can collectively trip a 429. When that happens the API returns a
+// Retry-After; honor it (don't touch the endpoint again until it passes) and keep
+// serving the last good reading as stale rather than blanking the meter to an error.
+let claudeLastGood = null; // { asOf, planType, windows } from the newest success
+let claudeRetryUntil = 0;  // epoch ms — skip the endpoint until we pass this
+
+// Retry-After is delta-seconds or an HTTP-date. Return an epoch-ms deadline,
+// clamped to [1s, 10m] so a bogus header can't wedge the meter open or shut.
+function retryAfterDeadline(header) {
+  const now = Date.now();
+  const clamp = (ms) => Math.min(Math.max(ms, now + 1000), now + 600_000);
+  if (!header) return now + 60_000; // no hint → a sane default backoff
+  const secs = Number(header);
+  if (Number.isFinite(secs)) return clamp(now + secs * 1000);
+  const at = Date.parse(header);
+  return Number.isNaN(at) ? now + 60_000 : clamp(at);
+}
+
+// Reshape the last good reading into a (stale) provider payload, or an honest
+// "unavailable" when we have nothing good to fall back on yet.
+function claudeStale(base, reason) {
+  if (!claudeLastGood) return { ...base, available: false, reason };
+  return {
+    ...base, available: true, live: false, stale: true, reason,
+    asOf: claudeLastGood.asOf, planType: claudeLastGood.planType, windows: claudeLastGood.windows,
+  };
+}
+
 async function claudeUsage() {
   const base = { id: 'claude', label: 'Claude' };
-  const cred = readJson(path.join(HOME, '.claude/.credentials.json'));
-  const o = cred?.claudeAiOauth;
+  const o = readClaudeOauth();
   if (!o?.accessToken) return { ...base, available: false, reason: 'not signed in to Claude' };
   if (o.expiresAt && o.expiresAt < Date.now()) {
     return { ...base, available: false, reason: 'token expired — run a Claude agent to refresh it' };
+  }
+  // Still inside a prior 429's Retry-After window — don't hit the endpoint at all.
+  if (Date.now() < claudeRetryUntil) {
+    return claudeStale(base, `rate-limited — retrying in ${Math.ceil((claudeRetryUntil - Date.now()) / 1000)}s`);
   }
   try {
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
       headers: { Authorization: `Bearer ${o.accessToken}`, 'anthropic-beta': 'oauth-2025-04-20' },
       signal: AbortSignal.timeout(8000),
     });
+    if (res.status === 429) {
+      claudeRetryUntil = retryAfterDeadline(res.headers.get('retry-after'));
+      return claudeStale(base, `rate-limited — retrying in ${Math.ceil((claudeRetryUntil - Date.now()) / 1000)}s`);
+    }
     if (res.status === 401) return { ...base, available: false, reason: 'token rejected — run a Claude agent to refresh it' };
-    if (!res.ok) return { ...base, available: false, reason: `usage API returned ${res.status}` };
+    if (!res.ok) return claudeStale(base, `usage API returned ${res.status}`);
     const data = await res.json();
     const windows = [
       toWindow(data.five_hour, '5h', '5-hour'),
@@ -87,9 +156,10 @@ async function claudeUsage() {
       toWindow(data.seven_day_opus, '7d_opus', 'Weekly · Opus'),
     ].filter(Boolean);
     if (!windows.length) return { ...base, available: false, reason: 'no rate-limit data (subscription plan only)' };
+    claudeLastGood = { asOf: new Date().toISOString(), planType: data.plan_type || null, windows };
     return { ...base, available: true, live: true, planType: data.plan_type || null, windows };
   } catch (e) {
-    return { ...base, available: false, reason: 'could not reach usage API: ' + (e.message || e.name) };
+    return claudeStale(base, 'could not reach usage API: ' + (e.message || e.name));
   }
 }
 
@@ -155,23 +225,39 @@ function codexUsage() {
   return { ...base, available: false, reason: 'no usage snapshot yet — run a Codex task (limits arrive on live calls)' };
 }
 
-// ---- Gemini / Hermes (detected, but no usable rate-limit source) ------------
+// ---- DeepSeek (live account credit balance) ---------------------------------
 
-function geminiUsage() {
-  const base = { id: 'gemini', label: 'Gemini' };
-  if (!exists(path.join(HOME, '.gemini/oauth_creds.json'))) return { ...base, available: false, reason: 'not configured' };
-  return { ...base, available: false, reason: 'Gemini CLI (free OAuth tier) exposes no utilization API' };
-}
+async function deepseekUsage() {
+  const base = { id: 'deepseek', label: 'DeepSeek' };
+  const apiKey = process.env.DEEPSEEK_API_KEY?.trim()
+    || readEnvValue(path.join(HOME, '.hermes/.env'), 'DEEPSEEK_API_KEY');
+  if (!apiKey) return { ...base, available: false, reason: 'DEEPSEEK_API_KEY is not configured' };
 
-function hermesUsage() {
-  const base = { id: 'hermes', label: 'Hermes' };
-  if (!exists(path.join(HOME, '.hermes/config.yaml'))) return { ...base, available: false, reason: 'not configured' };
-  return { ...base, available: false, reason: 'DeepSeek backend is pay-as-you-go — no rate-limit window' };
+  try {
+    const res = await fetch('https://api.deepseek.com/user/balance', {
+      headers: { Accept: 'application/json', Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.status === 401) return { ...base, available: false, reason: 'API key rejected' };
+    if (!res.ok) return { ...base, available: false, reason: `balance API returned ${res.status}` };
+
+    const data = await res.json();
+    const balances = Array.isArray(data.balance_infos)
+      ? data.balance_infos.map((b) => ({
+          currency: String(b.currency || '').toUpperCase(),
+          total: String(b.total_balance ?? ''),
+        })).filter((b) => b.currency && b.total && Number.isFinite(Number(b.total)))
+      : [];
+    if (!balances.length) return { ...base, available: false, reason: 'balance API returned no totals' };
+    return { ...base, available: true, live: true, creditAvailable: data.is_available !== false, balances };
+  } catch (e) {
+    return { ...base, available: false, reason: 'could not reach balance API: ' + (e.message || e.name) };
+  }
 }
 
 // ---- aggregate (with a short cache so polling can't hammer the API) ---------
 
-const PROVIDERS = [claudeUsage, codexUsage, geminiUsage, hermesUsage];
+const PROVIDERS = [claudeUsage, codexUsage, deepseekUsage];
 let cache = null; // { at, payload }
 const CACHE_MS = 30_000;
 

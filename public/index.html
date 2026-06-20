@@ -2,8 +2,24 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#11151d" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>cnos — Claude agent fleet</title>
+  <script>
+    // Detect a mobile/touch device early and tag <html> so the layout adapts
+    // before first paint (no flash of the desktop grid). Width-based rules in
+    // style.css handle narrow windows too; this class adds touch ergonomics.
+    (function () {
+      var ua = navigator.userAgent || '';
+      var mobileUA = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile|Silk/i.test(ua);
+      var iPadOS = navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1; // iPadOS poses as Mac
+      var coarse = navigator.maxTouchPoints > 0 && window.matchMedia && matchMedia('(pointer: coarse)').matches;
+      if (mobileUA || iPadOS || coarse) document.documentElement.classList.add('mobile');
+    })();
+  </script>
   <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
   <link rel="stylesheet" href="/style.css" />
 </head>

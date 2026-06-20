@@ -6,6 +6,23 @@ const TargetEl  = document.getElementById('target');
 const HeardEl   = document.getElementById('heard');
 const CardTpl   = document.getElementById('card-tpl');
 
+const OrchToggle  = document.getElementById('orchToggle');
+const OrchPanel   = document.getElementById('orchPanel');
+const OrchGoal    = document.getElementById('orchGoal');
+const OrchType    = document.getElementById('orchType');
+const OrchWorkers = document.getElementById('orchWorkers');
+const OrchMax     = document.getElementById('orchMax');
+const OrchRun     = document.getElementById('orchRun');
+const OrchStatus  = document.getElementById('orchStatus');
+const OrchLoop    = document.getElementById('orchLoop');
+const OrchPhase   = document.getElementById('orchPhase');
+const OrchRound   = document.getElementById('orchRound');
+const OrchAgents  = document.getElementById('orchAgents');
+const OrchFleet   = document.getElementById('orchFleet');
+const OrchFeed    = document.getElementById('orchFeed');
+const OrchWorkdir = document.getElementById('orchWorkdir');
+const OrchWorkdirStat = document.getElementById('orchWorkdirStat');
+
 const TERM_THEME = {
   background: '#141821', foreground: '#e6e9ef', cursor: '#7c9cff',
   selectionBackground: '#33405e',
@@ -20,6 +37,8 @@ const TERM_THEME = {
 const agents = new Map();
 let ws = null;
 let pendingSpawnAnnounce = false; // set when a spawn was requested by voice
+let orchState = { enabled: false, running: false, status: 'idle', goal: '', workerType: 'claude',
+                  startWorkers: 3, maxAgents: 8, round: 0, agents: 0, fleet: [], log: [] }; // mirrors server
 let fleetLayoutFrame = 0;
 
 function queueFleetLayout() {
@@ -155,7 +174,13 @@ function connect() {
 
 function dispatch(msg) {
   switch (msg.type) {
-    case 'hello':   resetFleet(); break;                 // fresh connection
+    case 'hello':                                        // fresh connection
+      serverHome = msg.home || serverHome;
+      serverDefaultWorkdir = msg.workdir || serverDefaultWorkdir;
+      if (!currentWorkdir) currentWorkdir = serverDefaultWorkdir;
+      renderCwdLabel();
+      resetFleet();
+      break;
     case 'list':    syncList(msg.terminals); break;
     case 'spawned':
       ensureCard(msg);
@@ -170,6 +195,10 @@ function dispatch(msg) {
     case 'routed':  flashRouted(msg); break;
     case 'spawn-error': note(escapeHtml(msg.message), 'warn'); break;
     case 'speaking':   setSpeaking(msg.on, msg.name); break;
+    case 'orchestration':
+      orchState = msg; // full server snapshot (enabled, running, status, fleet, log, …)
+      renderOrchestration();
+      break;
   }
 }
 
@@ -187,9 +216,9 @@ function syncList(list) {
 }
 
 // ---- Cards / terminals ------------------------------------------------------
-function ensureCard({ id, name, agentType, cwd }) {
+function ensureCard({ id, name, agentType, role, cwd }) {
   let a = agents.get(id);
-  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; paintHeader(a); refreshTargets(); return a; }
+  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; if (role) a.role = role; paintHeader(a); refreshTargets(); return a; }
 
   const el = CardTpl.content.firstElementChild.cloneNode(true);
   const termEl = el.querySelector('.term');
@@ -212,7 +241,7 @@ function ensureCard({ id, name, agentType, cwd }) {
   const ro = new ResizeObserver(() => requestAnimationFrame(doFit));
   ro.observe(termEl);
 
-  a = { id, name, agentType: agentType || 'claude', cwd, exited: false, term, fit, ro, el };
+  a = { id, name, agentType: agentType || 'claude', role: role || 'worker', cwd, exited: false, term, fit, ro, el };
   agents.set(id, a);
 
   el.querySelector('.interrupt').onclick = () => send({ type: 'control', target: name, action: 'interrupt' });
@@ -233,6 +262,9 @@ function paintHeader(a) {
   a.el.querySelector('.name').textContent = a.name;
   const typeEl = a.el.querySelector('.type');
   if (typeEl) { typeEl.textContent = a.agentType || ''; typeEl.dataset.type = a.agentType || ''; }
+  const roleEl = a.el.querySelector('.role');
+  if (roleEl) roleEl.hidden = a.role !== 'lead';   // show the LEAD badge on the orchestrator
+  a.el.classList.toggle('lead', a.role === 'lead');
   const cwd = a.el.querySelector('.cwd');
   cwd.textContent = a.cwd.replace(/^.*\//, '…/') || a.cwd;
   cwd.title = a.cwd;
@@ -293,11 +325,122 @@ document.getElementById('cmdForm').addEventListener('submit', (e) => {
   input.value = '';
 });
 
-document.getElementById('addBtn').onclick = () => send({ type: 'spawn', agentType: document.getElementById('agentType').value });
+document.getElementById('addBtn').onclick = () => send({ type: 'spawn', agentType: document.getElementById('agentType').value, cwd: currentWorkdir || undefined });
 
 // Clear the typed-but-unsent input for whoever's selected in the target bar
 // (the default "▶ everyone" → all agents). Mirrors saying "everyone, clear".
 document.getElementById('clearBtn').onclick = () => send({ type: 'control', target: TargetEl.value, action: 'clear' });
+
+// ---- Orchestration: goal-driven, auto-scaling lead-agent loop ---------------
+// OFF keeps cnos exactly as it is — you route commands yourself. ON reveals the
+// goal panel: set a goal + Start and the server spawns a lead agent + workers and
+// runs the loop, streaming live fleet status + an activity feed back here. Config
+// lives on the server so flipping the toggle / editing the goal syncs every tab.
+
+const clampInt = (v, lo, hi, dflt) => {
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
+};
+
+function statusHint(status, running) {
+  switch (status) {
+    case 'briefing': return 'spawning agents and briefing the lead…';
+    case 'running':  return 'lead is delegating — agents working…';
+    case 'done':     return '✓ goal complete';
+    case 'stopped':  return 'stopped';
+    case 'stalled':  return 'stalled — the lead stopped issuing tasks';
+    case 'error':    return 'error — see the activity feed';
+    default:         return running ? 'running…' : 'set a goal, then Start — spawns a lead + workers and runs the loop';
+  }
+}
+
+const STATE_LABEL = { idle: 'idle', working: 'working', busy: 'busy', thinking: 'thinking' };
+function renderFleet(fleet) {
+  OrchFleet.innerHTML = fleet.map((f) => {
+    const role = f.role === 'lead'
+      ? '<span class="of-role lead">lead</span>'
+      : `<span class="of-role">${escapeHtml(f.agentType || 'worker')}</span>`;
+    const task = f.task
+      ? `<span class="of-task" title="${escapeHtml(f.task)}">${escapeHtml(f.task)}</span>`
+      : '<span class="of-idle">—</span>';
+    return `<div class="of-row" data-state="${escapeHtml(f.state)}"><span class="of-dot"></span>`
+      + `<span class="of-name">${escapeHtml(f.name)}</span>${role}`
+      + `<span class="of-state">${STATE_LABEL[f.state] || escapeHtml(f.state)}</span>${task}</div>`;
+  }).join('') || '<div class="of-empty">no agents yet</div>';
+}
+
+const FEED_ICON = { start: '▶', plan: '📋', assign: '➡', lead: '🧠', done: '✓', spawn: '＋',
+                    note: '·', warn: '⚠', stalled: '■', stopped: '■', error: '✕' };
+function renderFeed(log) {
+  // newest first
+  OrchFeed.innerHTML = log.slice().reverse().map((e) =>
+    `<div class="ofeed-line ofeed-${escapeHtml(e.kind)}"><span class="ofeed-ic">${FEED_ICON[e.kind] || '·'}</span>`
+    + `<span class="ofeed-tx">${escapeHtml(e.text)}</span></div>`
+  ).join('');
+}
+
+function renderOrchestration() {
+  const on = !!orchState.enabled;
+  OrchToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+  OrchToggle.querySelector('.orch-state').textContent = on ? 'ON' : 'OFF';
+  OrchPanel.hidden = !on;
+  document.body.classList.toggle('orchestrating', on);
+  if (!on) return;
+
+  const running = !!orchState.running;
+  // Reflect server config, but never yank a field the user is mid-edit.
+  const ae = document.activeElement;
+  if (ae !== OrchGoal && typeof orchState.goal === 'string') OrchGoal.value = orchState.goal;
+  if (ae !== OrchType && orchState.workerType) OrchType.value = orchState.workerType;
+  if (ae !== OrchWorkers && orchState.startWorkers) OrchWorkers.value = orchState.startWorkers;
+  if (ae !== OrchMax && orchState.maxAgents) OrchMax.value = orchState.maxAgents;
+  for (const el of [OrchGoal, OrchType, OrchWorkers, OrchMax]) el.disabled = running; // lock while running
+
+  OrchRun.textContent = running ? '■ Stop' : '▶ Start';
+  OrchRun.classList.toggle('stop', running);
+  OrchStatus.textContent = statusHint(orchState.status, running);
+
+  const fleet = orchState.fleet || [], log = orchState.log || [];
+  const show = running || fleet.length || log.length;
+  OrchLoop.hidden = !show;
+  if (show) {
+    OrchPhase.textContent = orchState.status || 'idle';
+    OrchPhase.dataset.status = orchState.status || 'idle';
+    OrchRound.textContent = orchState.round || 0;
+    OrchAgents.textContent = `${orchState.agents || 0}/${orchState.maxAgents || 8}`;
+    if (orchState.workdir) { OrchWorkdir.textContent = cwdShort(orchState.workdir); OrchWorkdir.title = orchState.workdir; OrchWorkdirStat.hidden = false; }
+    else OrchWorkdirStat.hidden = true;
+    renderFleet(fleet);
+    renderFeed(log);
+  }
+}
+
+OrchToggle.onclick = () => send({ type: 'set-orchestration', enabled: !orchState.enabled });
+
+OrchRun.onclick = () => {
+  if (orchState.running) { send({ type: 'orchestrate-stop' }); return; }
+  const goal = OrchGoal.value.trim();
+  if (!goal) { OrchStatus.textContent = 'enter a goal first'; OrchGoal.focus(); return; }
+  send({ type: 'orchestrate-start', goal,
+    workerType: OrchType.value,
+    workdir: currentWorkdir || undefined,
+    startWorkers: clampInt(OrchWorkers.value, 1, 12, 3),
+    maxAgents: clampInt(OrchMax.value, 2, 16, 8) });
+};
+
+// Persist config edits so every open tab shares one setup (server ignores while running).
+function pushOrchConfig() {
+  send({ type: 'set-orchestration', config: {
+    goal: OrchGoal.value.trim(),
+    workerType: OrchType.value,
+    startWorkers: clampInt(OrchWorkers.value, 1, 12, 3),
+    maxAgents: clampInt(OrchMax.value, 2, 16, 8),
+  } });
+}
+OrchGoal.addEventListener('change', pushOrchConfig);
+OrchType.addEventListener('change', pushOrchConfig);
+OrchWorkers.addEventListener('change', pushOrchConfig);
+OrchMax.addEventListener('change', pushOrchConfig);
 
 // ---- Voice control ----------------------------------------------------------
 const BROADCAST = new Set(['everyone', 'all', 'team', 'fleet', 'everybody', 'guys']);
@@ -358,7 +501,7 @@ function routeVoice(parsed, transcript) {
   }
   if (parsed.global === 'spawn') {
     pendingSpawnAnnounce = true;
-    send({ type: 'spawn', agentType: parsed.agentType });
+    send({ type: 'spawn', agentType: parsed.agentType, cwd: currentWorkdir || undefined });
     note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new ${parsed.agentType} agent…</span>`);
     return;
   }
@@ -605,6 +748,90 @@ function stopListening() {
   setMic('off', 'Listen');
   note('voice off — click Listen to resume');
 }
+
+// ---- Working-directory picker -----------------------------------------------
+// A 📁 button in the top bar opens a small folder browser (backed by /api/dirs).
+// The chosen directory is where every NEW agent — manual “+ Add”, voice “new
+// terminal”, and the entire orchestrator fleet — gets spawned. Persisted in
+// localStorage so it survives reloads.
+const CwdBtn   = document.getElementById('cwdBtn');
+const CwdLabel = CwdBtn.querySelector('.cwd-label');
+const CwdPop   = document.getElementById('cwdPop');
+const CwdPath  = document.getElementById('cwdPath');
+const CwdGo    = document.getElementById('cwdGo');
+const CwdList  = document.getElementById('cwdList');
+const CwdUse   = document.getElementById('cwdUse');
+const CwdMsg   = document.getElementById('cwdMsg');
+
+let serverHome = '';
+let serverDefaultWorkdir = '';
+let currentWorkdir = localStorage.getItem('cnos.cwd') || '';
+let browsePath = '';
+
+function cwdShort(p) {
+  if (!p) return '~';
+  if (serverHome && p === serverHome) return '~';
+  const base = String(p).replace(/[/\\]+$/, '').split(/[/\\]/).pop();
+  return base || p;
+}
+function renderCwdLabel() {
+  CwdLabel.textContent = cwdShort(currentWorkdir);
+  CwdBtn.title = 'New agents spawn in: ' + (currentWorkdir || '(server default)') + ' — click to change';
+}
+
+function cwdRow(label, fullPath, isUp) {
+  const el = document.createElement('button');
+  el.type = 'button';
+  el.className = 'cwd-row' + (isUp ? ' up' : '');
+  el.textContent = (isUp ? '↑  ' : '') + label;
+  el.onclick = () => loadDirs(fullPath);
+  return el;
+}
+
+async function loadDirs(p, isRetry) {
+  CwdMsg.textContent = 'loading…';
+  try {
+    const r = await fetch('/api/dirs?path=' + encodeURIComponent(p || ''));
+    const j = await r.json();
+    if (!r.ok) {
+      // a stale/typo path shouldn't dead-end the browser — fall back to the default
+      if (!isRetry && p) { CwdMsg.textContent = (j.error || 'cannot open') + ' — showing default'; return loadDirs('', true); }
+      CwdMsg.textContent = j.error || 'cannot open folder'; return;
+    }
+    serverHome = j.home || serverHome;
+    browsePath = j.path;
+    CwdPath.value = j.path;
+    CwdList.innerHTML = '';
+    if (j.parent) CwdList.appendChild(cwdRow('..', j.parent, true));
+    for (const name of j.dirs) CwdList.appendChild(cwdRow(name, j.path.replace(/[/\\]+$/, '') + '/' + name, false));
+    CwdMsg.textContent = j.dirs.length ? '' : '(no subfolders here)';
+  } catch (e) { CwdMsg.textContent = 'error: ' + e.message; }
+}
+
+function openCwd() {
+  const r = CwdBtn.getBoundingClientRect();
+  CwdPop.style.top = (r.bottom + 6) + 'px';
+  CwdPop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 348)) + 'px';
+  CwdPop.hidden = false;
+  loadDirs(currentWorkdir || '');
+}
+function closeCwd() { CwdPop.hidden = true; }
+
+CwdBtn.onclick = (e) => { e.stopPropagation(); if (CwdPop.hidden) openCwd(); else closeCwd(); };
+CwdGo.onclick = () => loadDirs(CwdPath.value.trim());
+CwdPath.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); loadDirs(CwdPath.value.trim()); } });
+CwdUse.onclick = () => {
+  currentWorkdir = browsePath || CwdPath.value.trim();
+  if (currentWorkdir) localStorage.setItem('cnos.cwd', currentWorkdir); else localStorage.removeItem('cnos.cwd');
+  renderCwdLabel();
+  closeCwd();
+  note(`📁 new agents will spawn in <b>${escapeHtml(currentWorkdir || 'the server default')}</b>`);
+};
+// dismiss on outside click / Escape
+document.addEventListener('click', (e) => { if (!CwdPop.hidden && !CwdPop.contains(e.target) && !CwdBtn.contains(e.target)) closeCwd(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !CwdPop.hidden) closeCwd(); });
+
+renderCwdLabel();
 
 // ---- Usage meter (top bar) --------------------------------------------------
 // Polls /api/usage and renders a per-provider utilization strip. Read-only:

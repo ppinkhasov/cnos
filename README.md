@@ -56,6 +56,15 @@ still works when you open cnos on the host machine itself.
 Only the CLIs you have installed will launch; others report a clear "not installed"
 message. Override any type with `CNOS_<TYPE>_BIN` and `CNOS_<TYPE>_ARGS`.
 
+## Working directory
+
+The **📁 folder button** in the top bar picks the directory new agents spawn into —
+click it to browse (or paste a path / `~/dev/app`, then **Use this folder**). It
+applies to every new agent: manual **+ Add**, voice *"new terminal"*, and the whole
+orchestrator fleet (lead + workers). The choice is remembered across reloads; the
+default is `CNOS_WORKDIR` (your home dir). Each agent card shows the directory it's
+running in.
+
 ## Voice grammar
 
 ```
@@ -70,6 +79,25 @@ The first word is the target. `everyone`, `all`, `team`, `fleet` broadcast.
 Voice is hands-free: it auto-detects when you start and stop talking (VAD),
 records the clip, and transcribes it with Whisper.
 
+## Orchestrate (goal → fleet)
+
+Flip **Orchestrate** on, type a **goal**, and press **Start**. cnos spawns a
+**lead** agent plus a few **workers** and runs an autonomous
+*perceive → reason → act → observe* loop until the goal is met:
+
+- The **lead** (a Claude agent) breaks the goal into subtasks and delegates them,
+  emitting `@@CNOS` directives the server reads from its terminal.
+- The server **dispatches** each task to an idle worker, **watches** for it to go
+  quiet (done), and **reports** the result back to the lead.
+- When every worker is busy and work remains, cnos **auto-spawns** another worker
+  (up to the **Max** cap). It stops when the lead declares the goal complete.
+
+You set the **goal**, the worker **type**, how many **workers** to start with
+(default 3), and the **Max** agent cap (default 8). A live panel shows each
+agent's state and an activity feed of the lead's decisions; **Stop** halts the
+loop and leaves the agents running. The lead is always a `claude` agent (it needs
+the directive protocol); override its model/flags with `CNOS_LEAD_ARGS`.
+
 ## Configuration
 
 | Env var               | Default                                   | Meaning                              |
@@ -78,6 +106,7 @@ records the clip, and transcribes it with Whisper.
 | `CNOS_WORKDIR`        | your home dir                             | default working dir for agents       |
 | `CNOS_<TYPE>_BIN`     | the CLI name (`claude`, `codex`, …)       | path to that agent's CLI             |
 | `CNOS_<TYPE>_ARGS`    | per-type auto-mode flags (see table)      | flags that agent type launches with  |
+| `CNOS_LEAD_ARGS`      | (none)                                    | extra flags for the orchestrator lead (e.g. `--model sonnet`) |
 | `DEEPSEEK_API_KEY`    | `~/.hermes/.env` fallback                 | DeepSeek balance API credential      |
 | `CNOS_WHISPER_BIN`    | auto (`whisper-cli`)                      | path to the whisper.cpp binary       |
 | `CNOS_WHISPER_MODEL`  | `models/ggml-base.en.bin`                 | Whisper model file                   |

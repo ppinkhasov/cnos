@@ -207,6 +207,8 @@ const orchestrationPayload = () => ({
   type: 'orchestration',
   enabled: orch.enabled,
   running: orch.running,
+  // a stopped/stalled run can be resumed as long as its lead agent is still alive
+  resumable: !orch.running && !!leadTerm() && (orch.status === 'stopped' || orch.status === 'stalled'),
   status: orch.status,
   goal: orch.goal,
   workerType: orch.workerType,
@@ -353,9 +355,35 @@ function sendCommand(term, text) {
 }
 
 // ---- Orchestrator engine (the loop: perceive → reason → act → observe) -------
-// An agent is "idle" (done with whatever it was doing) when its PTY has produced
-// no output for IDLE_MS. Agents run in auto mode, so they don't stall on prompts.
-function isIdle(term) { return Date.now() - (term.lastDataAt || 0) > ORCH.IDLE_MS; }
+// Idle/busy detection. A naive "no output for N ms" timer is unreliable: an IDLE
+// Claude TUI still emits periodic bytes (cursor blink, footer/prompt redraws), so
+// the timer keeps thinking a finished agent is busy — and the lead then hangs
+// forever waiting on workers that are actually done. Instead we read Claude's
+// footer, which shows "esc to interrupt" the whole time it is processing and never
+// when idle at the prompt. We look only at output from the LAST tick (not the
+// accumulated history, which still holds old spinner frames), with a few ticks of
+// stickiness to ride out the gaps between spinner redraws.
+const CLAUDE_BUSY_RE   = /esctointerrupt|esctocancel/;
+const CLAUDE_FOOTER_RE = /esctointerrupt|esctocancel|shift\+?tabtocycle|\?forshortcuts|forshortcuts|automodeon|acceptedits|bypasspermissions|planmode/;
+const BUSY_STICKY_TICKS = 3;
+
+// Recompute each agent's busy/idle from the output it produced since the last tick.
+function refreshActivity() {
+  for (const t of terminals.values()) {
+    const recent = deltaSince(t, t.viewMark || 0).replace(ANSI_RE, '').replace(/\s+/g, '').toLowerCase();
+    t.viewMark = t.totalBytes;
+    if (t.type !== 'claude') continue;                                                          // other TUIs → quiet-timer
+    if (CLAUDE_BUSY_RE.test(recent)) { t.busyTicks = BUSY_STICKY_TICKS; t.claudeSeen = true; }  // actively working
+    else if (CLAUDE_FOOTER_RE.test(recent)) { t.busyTicks = 0; t.claudeSeen = true; }           // idle at the prompt
+    else if (t.busyTicks > 0) t.busyTicks--;                                                     // no footer this tick → decay
+  }
+}
+
+function isIdle(term) {
+  // Once Claude's footer has appeared, trust the interrupt-hint signal over timing.
+  if (term.type === 'claude' && term.claudeSeen) return (term.busyTicks || 0) === 0;
+  return Date.now() - (term.lastDataAt || 0) > ORCH.IDLE_MS; // non-Claude / pre-boot fallback
+}
 function broadcastOrch() { broadcast(orchestrationPayload()); }
 function orchLog(kind, text) {
   orch.log.push({ t: Date.now(), kind, text });
@@ -544,9 +572,28 @@ function orchFinish(status, reason) {
   broadcastOrch();
 }
 
+// Resume a stopped/stalled run in place. Stop() only halts the loop — the lead and
+// workers keep running and all state (goal, pending tasks, orders offset, log) is
+// retained — so resuming just re-arms the tick. The next pass catches up on any
+// work the agents finished while paused (OBSERVE) and on directives the lead wrote.
+function orchResume() {
+  if (orch.running) return;
+  if (!orch.goal || !leadTerm()) { orchLog('warn', 'nothing to resume — start a new run'); broadcastOrch(); return; }
+  // Re-baseline activity views so the first tick reads current screen state, not the
+  // whole backlog accumulated during the pause (which still holds old spinner frames).
+  for (const t of terminals.values()) t.viewMark = t.totalBytes;
+  orch.running = true;
+  orch.status = orch.briefed ? 'running' : 'briefing';
+  orch.nudged = false; // give the lead a fresh chance before any stall check
+  orchLog('resume', 'resumed — continuing where it left off');
+  orch.timer = setInterval(orchTick, ORCH.TICK_MS);
+  broadcastOrch();
+}
+
 // One pass of the loop. Runs every TICK_MS while a goal is in progress.
 function orchTick() {
   if (!orch.running) return;
+  refreshActivity();   // recompute every agent's busy/idle from the last tick's output
   const lead = leadTerm();
   if (!lead) { orchFinish('error', 'the lead agent is gone'); return; }
 
@@ -705,6 +752,10 @@ function handle(ws, msg) {
 
     case 'orchestrate-stop':
       if (orch.running) orchFinish('stopped', 'stopped by user');
+      break;
+
+    case 'orchestrate-resume':
+      orchResume();
       break;
   }
 }

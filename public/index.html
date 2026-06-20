@@ -30,6 +30,12 @@
       <span class="tag">command your fleet</span>
     </div>
 
+    <button id="orchToggle" class="orch-toggle" type="button" aria-pressed="false"
+            title="Auto-orchestrate — set a goal and let a lead agent spawn & delegate to a fleet of workers until it's done">
+      <span class="orch-light"></span>
+      <span class="orch-text">Orchestrate <b class="orch-state">OFF</b></span>
+    </button>
+
     <form id="cmdForm" class="cmd">
       <select id="target" title="Who to send to"></select>
       <input id="cmdInput" type="text" autocomplete="off"
@@ -42,18 +48,59 @@
       <select id="micSelect" class="micsel" title="Microphone input">
         <option value="">🎤 default mic</option>
       </select>
+      <button id="cwdBtn" class="btn cwd-btn" type="button"
+              title="Working directory for new agents — click to change">
+        <span class="cwd-ic">📁</span><span class="cwd-label">~</span>
+      </button>
       <select id="agentType" class="typesel" title="Agent type to spawn">
         <option value="claude">claude</option>
         <option value="codex">codex</option>
         <option value="hermes">hermes</option>
       </select>
-      <button id="addBtn" class="btn" title="Spawn a new agent of the selected type">+ Add</button>
+      <button id="addBtn" class="btn" title="Spawn a new agent of the selected type in the working directory">+ Add</button>
       <button id="micBtn" class="btn mic" title="Toggle voice control">
         <span class="dot"></span><span class="label">Listen</span>
       </button>
       <button id="diagToggle" class="btn icon" title="Voice diagnostics (mic level + log)">🔎</button>
     </div>
   </header>
+
+  <!-- Orchestration panel — revealed only when the Orchestrate toggle is ON.
+       OFF leaves cnos exactly as it was: you route commands to agents yourself.
+       ON: set a goal + press Start → cnos spawns a lead + workers and runs the
+       perceive→reason→act→observe loop, auto-adding workers when all are busy. -->
+  <div id="orchPanel" class="orch-panel" hidden>
+    <div class="orch-row">
+      <span class="orch-badge">🤖 Auto-orchestrate</span>
+      <input id="orchGoal" class="orch-goal" type="text" autocomplete="off"
+             placeholder="Goal for the fleet — e.g. “build a REST API for a notes app, with tests and a README”" />
+      <label class="orch-field">Type
+        <select id="orchType">
+          <option value="claude">claude</option>
+          <option value="codex">codex</option>
+          <option value="hermes">hermes</option>
+        </select>
+      </label>
+      <label class="orch-field">Workers <input id="orchWorkers" type="number" min="1" max="12" value="3" /></label>
+      <label class="orch-field">Max <input id="orchMax" type="number" min="2" max="16" value="8" /></label>
+      <button id="orchRun" class="btn orch-run" type="button"
+              title="Spawn a lead agent + workers and run the goal loop until the lead declares it done">▶ Start</button>
+      <span id="orchStatus" class="orch-status">set a goal, then Start — spawns a lead + workers and runs the loop</span>
+    </div>
+    <div id="orchLoop" class="orch-loop" hidden>
+      <div class="orch-meta">
+        <span id="orchPhase" class="orch-phase" data-status="idle">idle</span>
+        <span class="orch-stat">round <b id="orchRound">0</b></span>
+        <span class="orch-stat"><b id="orchAgents">0/8</b> agents</span>
+        <span class="orch-stat" id="orchWorkdirStat" hidden>📁 <b id="orchWorkdir">~</b></span>
+        <span class="orch-hint">the lead (🧠) decomposes the goal and delegates; cnos auto-adds workers when all are busy</span>
+      </div>
+      <div class="orch-cols">
+        <div id="orchFleet" class="orch-fleet"></div>
+        <div id="orchFeed" class="orch-feed"></div>
+      </div>
+    </div>
+  </div>
 
   <div id="usage" class="usage" title="API usage by provider — click to refresh"></div>
 
@@ -78,6 +125,7 @@
         <span class="status"></span>
         <span class="name"></span>
         <span class="type"></span>
+        <span class="role" hidden>LEAD</span>
         <span class="cwd"></span>
         <span class="spacer"></span>
         <button class="ctl interrupt" title="Stop the current task (Esc)">stop</button>
@@ -88,6 +136,20 @@
       <div class="term"></div>
     </section>
   </template>
+
+  <!-- Working-directory picker popover (anchored under the 📁 button) -->
+  <div id="cwdPop" class="cwd-pop" hidden>
+    <div class="cwd-pop-head">
+      <input id="cwdPath" type="text" spellcheck="false" autocomplete="off"
+             placeholder="/path/to/project  (or ~/dev/app)" />
+      <button id="cwdGo" class="btn" type="button">Go</button>
+    </div>
+    <div id="cwdList" class="cwd-list"></div>
+    <div class="cwd-pop-foot">
+      <span id="cwdMsg" class="cwd-msg"></span>
+      <button id="cwdUse" class="btn cwd-use" type="button">Use this folder</button>
+    </div>
+  </div>
 
   <script src="/vendor/xterm/xterm.js"></script>
   <script src="/vendor/addon-fit/addon-fit.js"></script>

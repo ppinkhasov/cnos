@@ -132,7 +132,7 @@ function spawnTerminal({ type, name, cwd } = {}) {
       cols: 100,
       rows: 30,
       cwd: workdir,
-      env: { ...process.env, PATH: SPAWN_PATH, TERM: 'xterm-256color', CNOS_AGENT: agentName },
+      env: { ...process.env, PATH: SPAWN_PATH, TERM: 'xterm-256color', CNOS_AGENT: agentName, CNOS_PORT: String(PORT) },
     });
   } catch (err) {
     console.error(`  ! failed to spawn ${agentType} "${agentName}": ${err.message}`);
@@ -276,6 +276,14 @@ app.get('/api/usage', async (req, res) => {
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// Half-duplex voice: the TTS hook POSTs here right before/after an agent speaks
+// so the browser can mute the mic and not transcribe the agent's own speech as
+// a command (the echo/feedback loop). Fire-and-forget broadcast to all clients.
+app.post('/api/speaking', (req, res) => {
+  broadcast({ type: 'speaking', on: !!(req.body && req.body.on), name: req.body && req.body.name });
+  res.json({ ok: true });
 });
 
 // Transcribe a short audio clip with local whisper.cpp. The browser records the

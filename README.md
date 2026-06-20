@@ -38,6 +38,13 @@ Then open **http://localhost:4173 in Chrome**.
    - *“jack, stop”* → interrupts jack (Ctrl-C)
 3. Or use the command bar at the top, or just click a terminal and type.
 
+The UI is **mobile-responsive** — on a phone the top bar stacks, the usage meter
+wraps, and agents render one per row. To open it from your phone, browse to
+**`http://<your-mac-LAN-IP>:<PORT>`** on the same Wi-Fi (e.g.
+`http://192.168.1.20:4173`). Voice needs a secure context (HTTPS or `localhost`),
+so over plain LAN http you drive agents by **typing** in the command bar — voice
+still works when you open cnos on the host machine itself.
+
 ## Agent types
 
 | Type     | Launches                              | Auto mode                |
@@ -120,5 +127,6 @@ stay in sync (output is broadcast; scrollback is replayed on connect).
 
 Agents run in **auto mode** (auto-accept edits), not full bypass — but they can
 still make changes without prompting. Run cnos on a workdir you trust, ideally a
-sandbox. The server binds to localhost. Voice audio is transcribed **locally** by
-whisper.cpp and never leaves your machine.
+sandbox. **The server listens on all network interfaces** — so other devices on
+your LAN (like your phone) can reach it; only run it on a network you trust. Voice
+audio is transcribed **locally** by whisper.cpp and never leaves your machine.

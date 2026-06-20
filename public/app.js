@@ -27,6 +27,7 @@ const diagStatic = {
   engine: 'whisper (local)',
   secure: window.isSecureContext ? 'yes ✓' : 'NO ✗',
   perm: '?',
+  device: document.documentElement.classList.contains('mobile') ? 'mobile ✓' : 'desktop',
 };
 const diagLines = [];
 const diagEl = document.createElement('div');
@@ -41,7 +42,7 @@ function renderDiag() {
   const body = diagEl.querySelector('#diag-body');
   if (!body) return;
   body.innerHTML =
-    `<div class="diag-stat">API: <b>${diagStatic.api}</b> · engine: <b>${diagStatic.engine}</b><br>secure: <b>${diagStatic.secure}</b> · mic: <b>${diagStatic.perm}</b> · ws: <b>${ws && ws.readyState === 1 ? 'open ✓' : '…'}</b></div>` +
+    `<div class="diag-stat">API: <b>${diagStatic.api}</b> · engine: <b>${diagStatic.engine}</b><br>secure: <b>${diagStatic.secure}</b> · device: <b>${diagStatic.device}</b> · mic: <b>${diagStatic.perm}</b> · ws: <b>${ws && ws.readyState === 1 ? 'open ✓' : '…'}</b></div>` +
     diagLines.map((l) => `<div class="diag-line">${escapeHtml(l)}</div>`).join('');
 }
 function diagLog(msg) {
@@ -130,6 +131,7 @@ function dispatch(msg) {
     case 'exit':    markExited(msg.id); break;
     case 'routed':  flashRouted(msg); break;
     case 'spawn-error': note(escapeHtml(msg.message), 'warn'); break;
+    case 'speaking':   setSpeaking(msg.on, msg.name); break;
   }
 }
 
@@ -344,6 +346,25 @@ let mediaStream = null, audioCtx = null, analyser = null, vadBuf = null, vadRAF 
 let recorder = null, recMime = '', chunks = [];
 let hadSpeech = false, lastSpeechAt = 0, segStartAt = 0;
 
+// Half-duplex: while an agent is speaking (TTS), ignore the mic so we never
+// transcribe our own voice back as a command. cnos's TTS hook pings the server,
+// which relays a {speaking} message here. echoCancellation can't catch `say`
+// (it plays outside the browser's audio graph), so we gate capture instead.
+let speakingCount = 0, micSuppressUntil = 0, wasSuppressed = false;
+const SPEAK_TAIL_MS = 500; // stay muted briefly after speech to swallow room echo
+function micSuppressed() { return speakingCount > 0 || performance.now() < micSuppressUntil; }
+function setSpeaking(on, name) {
+  if (on) speakingCount++;
+  else if (speakingCount > 0 && --speakingCount === 0) micSuppressUntil = performance.now() + SPEAK_TAIL_MS;
+  if (listening) setMic('on', micSuppressed() ? '🔇 muted' : 'Listening');
+  diagLog((on ? '🔇 ' : '🔈 ') + (name || 'agent') + (on ? ' speaking → mic muted' : ' done speaking'));
+}
+function dropCurrentSegment() {
+  hadSpeech = false; // discard the in-flight clip instead of transcribing it
+  if (recorder && recorder.state !== 'inactive') { try { recorder.stop(); } catch {} }
+  else if (listening) startSegment();
+}
+
 const supported = !!(navigator.mediaDevices?.getUserMedia && window.MediaRecorder);
 diagLog(supported ? 'voice ready: getUserMedia + MediaRecorder + Whisper' : 'getUserMedia/MediaRecorder MISSING');
 
@@ -364,6 +385,14 @@ if (!supported) {
   }, true));
 
 async function autoStart() {
+  // Voice needs a secure context (HTTPS or localhost). Phones usually reach cnos
+  // over plain http://<laptop-ip>, where getUserMedia is blocked — fail soft and
+  // point the user at the command bar instead of flashing a scary "mic blocked".
+  if (!window.isSecureContext) {
+    setMic('off', 'Voice ⚠');
+    note('🎙 voice needs HTTPS or localhost — on this connection, type commands in the bar above', 'warn');
+    return;
+  }
   try {
     const st = await navigator.permissions.query({ name: 'microphone' });
     diagStatic.perm = st.state + (st.state === 'granted' ? ' ✓' : '');
@@ -452,9 +481,26 @@ function vadLoop() {
   for (let i = 0; i < vadBuf.length; i++) { const v = (vadBuf[i] - 128) / 128; sum += v * v; }
   const level = Math.min(100, Math.round(Math.sqrt(sum / vadBuf.length) * 300));
   const now = performance.now();
-  if (level > SPEECH_THRESH) { hadSpeech = true; lastSpeechAt = now; }
+
   const bar = diagEl.querySelector('#diag-level'); if (bar) bar.style.width = level + '%';
   const txt = diagEl.querySelector('#diag-leveltxt'); if (txt) txt.textContent = String(level);
+
+  if (micSuppressed()) {
+    // An agent is speaking (or just finished): never count this as speech, and
+    // hold the segment open so the TTS audio is dropped, not sent to Whisper.
+    hadSpeech = false; lastSpeechAt = 0; segStartAt = now; wasSuppressed = true;
+    vadRAF = requestAnimationFrame(vadLoop);
+    return;
+  }
+  if (wasSuppressed) {            // just un-muted → discard the TTS tail, start clean
+    wasSuppressed = false;
+    dropCurrentSegment();
+    if (listening) setMic('on', 'Listening');
+    vadRAF = requestAnimationFrame(vadLoop);
+    return;
+  }
+
+  if (level > SPEECH_THRESH) { hadSpeech = true; lastSpeechAt = now; }
   if (hadSpeech && lastSpeechAt && now - lastSpeechAt > SILENCE_MS) endSegment();
   else if (!hadSpeech && now - segStartAt > MAX_IDLE_MS) endSegment(); // recycle idle recorder
   vadRAF = requestAnimationFrame(vadLoop);

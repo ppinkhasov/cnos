@@ -199,7 +199,7 @@ body { display: flex; flex-direction: column; }
   flex: 1;
   overflow: auto;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(440px, 100%), 1fr));
   gap: 12px;
   padding: 12px;
   align-content: start;
@@ -369,3 +369,53 @@ body { display: flex; flex-direction: column; }
 #diag .diag-mic-row { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-bottom: 1px solid var(--line); }
 #diag #diag-mic { flex: 1; min-width: 0; background: var(--panel-2); color: var(--text); border: 1px solid var(--accent); border-radius: 6px; padding: 4px 6px; font-size: 11px; }
 #diag.min .diag-mic-row { display: none; }
+
+/* ---- Mobile / touch ---- */
+/* Touch ergonomics at any width (set via the `mobile` class on <html>). */
+html.mobile { -webkit-text-size-adjust: 100%; }
+/* 16px on form controls stops iOS Safari auto-zooming when they get focus. */
+html.mobile #cmdInput,
+html.mobile #target,
+html.mobile .micsel,
+html.mobile .typesel,
+html.mobile .btn { font-size: 16px; }
+html.mobile .ctl { padding: 6px 11px; }           /* bigger card-header tap targets */
+html.mobile .term { -webkit-overflow-scrolling: touch; }
+
+/* Narrow viewports (phones in portrait, small windows): stack the layout. */
+@media (max-width: 720px) {
+  #bar {
+    flex-wrap: wrap;
+    gap: 8px 10px;
+    padding: 8px 10px;
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+  }
+  .brand { flex: 1 1 auto; }
+  .tag { display: none; }                          /* reclaim a line */
+  .cmd { order: 5; flex: 1 1 100%; }               /* command bar = its own full row */
+  #target { min-width: 92px; }
+  .actions { order: 6; flex: 1 1 100%; flex-wrap: wrap; gap: 6px; }
+  .actions > * { flex: 1 1 auto; }                 /* selects/buttons share the row */
+  .micsel { max-width: none; }
+  #diagToggle { flex: 0 0 auto; }                  /* keep the 🔎 toggle compact */
+
+  #usage, .heard { padding-left: 10px; padding-right: 10px; }
+
+  #fleet {
+    grid-template-columns: 1fr;                    /* one agent per row */
+    gap: 10px;
+    padding: 10px;
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+  }
+  .card { height: 62vh; min-height: 300px; max-height: 560px; }
+  .card-bar .cwd { max-width: 110px; }
+
+  #diag { left: 8px; right: 8px; bottom: 8px; width: auto; }
+}
+
+/* Very small phones: keep the command row from cramping. */
+@media (max-width: 400px) {
+  .logo { font-size: 18px; }
+  .send { padding: 0 12px; }
+}

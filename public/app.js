@@ -1,10 +1,11 @@
-/* cnos front-end: a grid of live Claude terminals + voice orchestration. */
+/* cnos front-end: a grid of live Claude terminals + voice control. */
 
 const FleetEl   = document.getElementById('fleet');
 const EmptyEl   = document.getElementById('empty');
 const TargetEl  = document.getElementById('target');
 const HeardEl   = document.getElementById('heard');
 const CardTpl   = document.getElementById('card-tpl');
+const PromptSel = document.getElementById('promptSel'); // role-prompt picker for new agents
 
 const OrchToggle  = document.getElementById('orchToggle');
 const OrchPanel   = document.getElementById('orchPanel');
@@ -38,8 +39,8 @@ const TERM_THEME = {
 const agents = new Map();
 let ws = null;
 let pendingSpawnAnnounce = false; // set when a spawn was requested by voice
-let orchState = { enabled: false, running: false, status: 'idle', goal: '', workerType: 'claude',
-                  startWorkers: 3, maxAgents: 8, round: 0, agents: 0, fleet: [], log: [] }; // mirrors server
+let promptAliases = {};           // spoken alias -> role-prompt id (from the server's hello)
+let orchState = { enabled: false, running: false, status: 'idle', fleet: [], log: [] }; // mirrors server
 let fleetLayoutFrame = 0;
 
 function queueFleetLayout() {
@@ -180,6 +181,7 @@ function dispatch(msg) {
       serverDefaultWorkdir = msg.workdir || serverDefaultWorkdir;
       if (!currentWorkdir) currentWorkdir = serverDefaultWorkdir;
       renderCwdLabel();
+      populatePrompts(msg.prompts || []);
       resetFleet();
       break;
     case 'list':    syncList(msg.terminals); break;
@@ -188,7 +190,8 @@ function dispatch(msg) {
       setTimeout(() => refreshUsage(true), 8000); // a fresh agent run refreshes its token/snapshot
       if (pendingSpawnAnnounce) {
         pendingSpawnAnnounce = false;
-        note(`new ${escapeHtml(msg.agentType || 'agent')} <b>${escapeHtml(msg.name)}</b> ready — say “<b>${escapeHtml(msg.name)}</b>, …”`);
+        const r = msg.promptLabel ? ` <span class="mut">(${escapeHtml(msg.promptLabel)})</span>` : '';
+        note(`new ${escapeHtml(msg.agentType || 'agent')} <b>${escapeHtml(msg.name)}</b>${r} ready — say “<b>${escapeHtml(msg.name)}</b>, …”`);
       }
       break;
     case 'output':  agents.get(msg.id)?.term.write(msg.data); break;
@@ -217,9 +220,9 @@ function syncList(list) {
 }
 
 // ---- Cards / terminals ------------------------------------------------------
-function ensureCard({ id, name, agentType, role, cwd }) {
+function ensureCard({ id, name, agentType, role, promptLabel, cwd }) {
   let a = agents.get(id);
-  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; if (role) a.role = role; paintHeader(a); refreshTargets(); return a; }
+  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; if (role) a.role = role; if (promptLabel !== undefined) a.promptLabel = promptLabel; paintHeader(a); refreshTargets(); return a; }
 
   const el = CardTpl.content.firstElementChild.cloneNode(true);
   const termEl = el.querySelector('.term');
@@ -242,7 +245,7 @@ function ensureCard({ id, name, agentType, role, cwd }) {
   const ro = new ResizeObserver(() => requestAnimationFrame(doFit));
   ro.observe(termEl);
 
-  a = { id, name, agentType: agentType || 'claude', role: role || 'worker', cwd, exited: false, term, fit, ro, el };
+  a = { id, name, agentType: agentType || 'claude', role: role || 'worker', promptLabel: promptLabel || '', cwd, exited: false, term, fit, ro, el };
   agents.set(id, a);
 
   el.querySelector('.interrupt').onclick = () => send({ type: 'control', target: name, action: 'interrupt' });
@@ -264,8 +267,10 @@ function paintHeader(a) {
   const typeEl = a.el.querySelector('.type');
   if (typeEl) { typeEl.textContent = a.agentType || ''; typeEl.dataset.type = a.agentType || ''; }
   const roleEl = a.el.querySelector('.role');
-  if (roleEl) roleEl.hidden = a.role !== 'lead';   // show the LEAD badge on the orchestrator
+  const badge = a.role === 'lead' ? 'LEAD' : (a.promptLabel || ''); // orchestrator lead, else role-prompt
+  if (roleEl) { roleEl.textContent = badge; roleEl.hidden = !badge; }
   a.el.classList.toggle('lead', a.role === 'lead');
+  a.el.classList.toggle('roled', !!a.promptLabel && a.role !== 'lead');
   const cwd = a.el.querySelector('.cwd');
   cwd.textContent = a.cwd.replace(/^.*\//, '…/') || a.cwd;
   cwd.title = a.cwd;
@@ -326,7 +331,24 @@ document.getElementById('cmdForm').addEventListener('submit', (e) => {
   input.value = '';
 });
 
-document.getElementById('addBtn').onclick = () => send({ type: 'spawn', agentType: document.getElementById('agentType').value, cwd: currentWorkdir || undefined });
+document.getElementById('addBtn').onclick = () => send({
+  type: 'spawn',
+  agentType: document.getElementById('agentType').value,
+  cwd: currentWorkdir || undefined,
+  prompt: PromptSel.value || undefined,
+});
+
+// Fill the role-prompt picker from the server and build the voice alias map.
+function populatePrompts(list) {
+  promptAliases = {};
+  if (PromptSel) {
+    const prev = PromptSel.value;
+    PromptSel.innerHTML = '<option value="">— none —</option>';
+    for (const p of list) PromptSel.add(new Option(p.label, p.id));
+    if ([...PromptSel.options].some((o) => o.value === prev)) PromptSel.value = prev;
+  }
+  for (const p of list) for (const a of (p.aliases || [])) promptAliases[a] = p.id;
+}
 
 // Clear the typed-but-unsent input for whoever's selected in the target bar
 // (the default "▶ everyone" → all agents). Mirrors saying "everyone, clear".
@@ -335,9 +357,7 @@ document.getElementById('clearBtn').onclick = () => send({ type: 'control', targ
 // ---- Orchestration: goal-driven, auto-scaling lead-agent loop ---------------
 // OFF keeps cnos exactly as it is — you route commands yourself. ON reveals the
 // goal panel: set a goal + Start and the server spawns a lead agent + workers and
-// runs the loop, streaming live fleet status + an activity feed back here. Config
-// lives on the server so flipping the toggle / editing the goal syncs every tab.
-
+// runs the loop, streaming live fleet status + an activity feed back here.
 const clampInt = (v, lo, hi, dflt) => {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
@@ -487,7 +507,10 @@ function parseVoice(transcript) {
   const phrase = tokens.join(' ').toLowerCase();
   if (SPAWN_VERB.test(phrase) && SPAWN_NOUN.test(phrase)) {
     const m = phrase.match(AGENT_TYPE_RE);
-    return { global: 'spawn', agentType: m ? m[1] : 'claude' };
+    // a role name anywhere in the phrase preloads that prompt, e.g. "new terminal, programmer"
+    let prompt;
+    for (const tok of tokens) { const id = promptAliases[clean(tok)]; if (id) { prompt = id; break; } }
+    return { global: 'spawn', agentType: m ? m[1] : 'claude', prompt };
   }
 
   const head = clean(tokens[0]);
@@ -512,8 +535,9 @@ function routeVoice(parsed, transcript) {
   }
   if (parsed.global === 'spawn') {
     pendingSpawnAnnounce = true;
-    send({ type: 'spawn', agentType: parsed.agentType, cwd: currentWorkdir || undefined });
-    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new ${parsed.agentType} agent…</span>`);
+    send({ type: 'spawn', agentType: parsed.agentType, cwd: currentWorkdir || undefined, prompt: parsed.prompt });
+    const role = parsed.prompt ? ` as <b>${escapeHtml(parsed.prompt)}</b>` : '';
+    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new ${parsed.agentType} agent${role}…</span>`);
     return;
   }
   if (parsed.error) {
@@ -762,9 +786,8 @@ function stopListening() {
 
 // ---- Working-directory picker -----------------------------------------------
 // A 📁 button in the top bar opens a small folder browser (backed by /api/dirs).
-// The chosen directory is where every NEW agent — manual “+ Add”, voice “new
-// terminal”, and the entire orchestrator fleet — gets spawned. Persisted in
-// localStorage so it survives reloads.
+// The chosen directory is where every NEW agent — manual “+ Add” and voice
+// “new terminal” — gets spawned. Persisted in localStorage so it survives reloads.
 const CwdBtn   = document.getElementById('cwdBtn');
 const CwdLabel = CwdBtn.querySelector('.cwd-label');
 const CwdPop   = document.getElementById('cwdPop');

@@ -1,9 +1,11 @@
-// cnos — Voice-orchestrated fleet of Claude CLI agents.
+// cnos — Voice-controlled fleet of Claude CLI agents.
 //
-// Spawns real `claude --dangerously-skip-permissions --effort max` processes,
-// one per named agent, inside pseudo-terminals (PTYs). Streams their I/O to the
-// browser over a WebSocket so a grid of live xterm.js terminals can render them
-// and a voice layer can route spoken commands to a named agent (or all of them).
+// Spawns real `claude --permission-mode auto --effort max` processes, one per
+// named agent, inside pseudo-terminals (PTYs). Streams their I/O to the browser
+// over a WebSocket so a grid of live xterm.js terminals can render them and a
+// voice layer can route spoken commands to a named agent (or all of them).
+// Agents can be launched preloaded with a "role" prompt, and an optional
+// orchestration mode runs a goal-driven lead+workers loop.
 
 import express from 'express';
 import { createServer } from 'http';
@@ -15,11 +17,18 @@ import os from 'os';
 import fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { createRequire } from 'module';
 import { getUsage } from './usage.js';
 
 const execFileP = promisify(execFile);
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// Headless xterm: mirror each agent's PTY into an off-screen terminal so the
+// orchestrator can read its ACTUAL rendered screen — the only reliable way to
+// tell a busy Claude agent from an idle one (see isIdle). Loaded via require
+// because the package ships CommonJS.
+const require = createRequire(import.meta.url);
+const { Terminal: HeadlessTerminal } = require('@xterm/headless');
 
 // ---- Configuration (override via env) --------------------------------------
 const PORT = Number(process.env.PORT) || 4173;
@@ -81,13 +90,13 @@ for (const [type, def] of Object.entries(AGENT_DEFAULTS)) {
 // ---- Orchestrator (goal-driven, auto-scaling lead-agent loop) tuning --------
 // One terminal becomes the "lead" (a claude agent) that decomposes the goal and
 // delegates to worker agents. The lead issues machine-readable directives by
-// APPENDING JSON lines to an orders file (path set per-run in orchStart) the server tails,
-// and we feed it the goal + worker results by typing into its terminal. (A file —
-// not screen scraping — because the TUI renders text with cursor moves that drop
-// spaces and inject UI chrome mid-line, which shreds any scraped directive.)
+// APPENDING JSON lines to an orders file (path set per-run in orchStart) the
+// server tails, and we feed it the goal + worker results by typing into its
+// terminal. (A file — not screen scraping — because the TUI renders text with
+// cursor moves that drop spaces and inject UI chrome mid-line.)
 const ORCH = {
   TICK_MS: 1200,            // loop cadence
-  IDLE_MS: 3500,            // no PTY output for this long ⇒ agent is idle/done
+  IDLE_MS: 3500,            // no PTY output for this long ⇒ agent idle (non-Claude fallback)
   MIN_TASK_MS: 6000,        // floor before a just-assigned task can count as done
   LEAD_MIN_THINK_MS: 4000,  // floor before the lead's quiet counts as a finished reply
   SPAWN_COOLDOWN_MS: 8000,  // min gap between auto-scaling spawns
@@ -96,12 +105,6 @@ const ORCH = {
   MAX_ROUNDS: 24,           // safety ceiling on lead exchanges
 };
 const LEAD_EXTRA_ARGS = (process.env.CNOS_LEAD_ARGS || '').split(' ').filter(Boolean);
-
-// The lead issues directives by APPENDING JSON lines to an orders file (which the
-// server tails). A file is used — not terminal output — because Claude's TUI
-// renders text with cursor moves that drop inter-word spaces and inject UI chrome
-// mid-line, shredding any directive scraped from the screen. File bytes are exact.
-// The path is per-run (under the chosen working directory) — see orchStart.
 
 // The lead's role + protocol. Passed via --append-system-prompt (a CLI arg), so
 // it is never echoed into the terminal. ordersPath is the run's directive file.
@@ -136,6 +139,31 @@ function leadProtocol(workerType, ordersPath) {
   ].join('\n');
 }
 
+// ---- Role prompts -----------------------------------------------------------
+// Launch a CLI preloaded with a prompt (the generic Loop prompt, or a mitsuhiko
+// poc-engineering role). The prompt text is passed as the agent's first/positional
+// prompt, so it boots straight into that mode. Files live in prompts/.
+const PROMPT_SPECS = [
+  { id: 'loop',       file: 'loop_agent.md',                label: 'Loop',           aliases: ['loop', 'looping', 'iterate', 'iterating', 'continuous', 'auto', 'nonstop', 'keepgoing'] },
+  { id: 'orchestrator', file: 'orchestrator_agent.md',      label: 'Orchestrator',   aliases: ['orchestrator', 'orchestrate', 'orchestration', 'manager'] },
+  { id: 'programmer', file: 'implementation_agent.md',      label: 'Programmer',     aliases: ['programmer', 'implementer', 'implementation', 'coder', 'engineer'] },
+  { id: 'architect',  file: 'software_architect_agent.md',  label: 'Architect',      aliases: ['architect'] },
+  { id: 'designer',   file: 'architecture_design_agent.md', label: 'Architecture',   aliases: ['designer', 'design', 'architecture'] },
+  { id: 'analyst',    file: 'problem_analysis_agent.md',    label: 'Analyst',        aliases: ['analyst', 'analysis', 'analyze'] },
+  { id: 'planner',    file: 'detailed_planning_agent.md',   label: 'Planner',        aliases: ['planner', 'planning', 'plan'] },
+  { id: 'breakdown',  file: 'task_breakdown_agent.md',      label: 'Task breakdown', aliases: ['breakdown', 'tasks', 'tasking'] },
+  { id: 'lead',       file: 'programming_lead_agent.md',    label: 'Research lead',  aliases: ['lead', 'researchlead', 'research'] },
+];
+const PROMPTS = {}; // id -> { id, label, aliases, content }
+for (const spec of PROMPT_SPECS) {
+  try {
+    const content = fs.readFileSync(path.join(__dirname, 'prompts', spec.file), 'utf8').trim();
+    if (content) PROMPTS[spec.id] = { ...spec, content };
+  } catch { /* prompt file missing — skip it */ }
+}
+// What the client needs (NOT the full text — that stays server-side).
+const promptList = () => Object.values(PROMPTS).map((p) => ({ id: p.id, label: p.label, aliases: p.aliases }));
+
 // Voice transcription: local whisper.cpp (no API key, runs offline on-device).
 function resolveWhisper() {
   if (process.env.CNOS_WHISPER_BIN) return process.env.CNOS_WHISPER_BIN;
@@ -155,16 +183,11 @@ const NAME_POOL = [
 ];
 
 // ---- Terminal fleet ---------------------------------------------------------
-const terminals = new Map(); // id -> { id, name, cwd, pty, history }
+const terminals = new Map(); // id -> term
 const clients = new Set();   // connected browser sockets
 let nextId = 1;
 
-// ---- Orchestration: goal-driven, auto-scaling lead-agent loop ---------------
-// off → cnos behaves exactly as today: you route commands to agents yourself.
-// on  → you set a GOAL and press Start; cnos spawns a lead agent + workers and
-//       runs a perceive→reason→act→observe loop (the lead delegates, the server
-//       executes and reports results back) until the lead declares the goal done.
-//       State lives here and is broadcast so every open tab stays in sync.
+// ---- Orchestration state (goal-driven lead+workers loop) --------------------
 const orch = {
   enabled: false,
   running: false,
@@ -192,7 +215,7 @@ const orch = {
   timer: null,
 };
 
-// Live per-agent status for the UI, derived from the PTY stream + task state.
+// Live per-agent status for the UI, derived from the PTY screen + task state.
 function fleetSnapshot() {
   return [...terminals.values()].map((t) => {
     let state;
@@ -245,7 +268,11 @@ function pickName(requested) {
   return NAME_POOL.find((n) => !used.has(n)) || `agent-${nextId}`;
 }
 
-function spawnTerminal({ type, name, cwd, role, extraArgs } = {}) {
+// Spawn an agent.
+//   prompt    — a role-prompt id; its text rides in as the agent's positional prompt.
+//   role      — 'lead' marks the orchestrator's lead agent (UI badge + worker pool).
+//   extraArgs — extra CLI flags (the orchestrator uses --append-system-prompt here).
+function spawnTerminal({ type, name, cwd, prompt, role, extraArgs } = {}) {
   const agentType = AGENT_TYPES[type] ? type : DEFAULT_AGENT;
   const spec = AGENT_TYPES[agentType];
   if (!spec.bin.includes('/')) { // resolveBin couldn't find it on PATH
@@ -257,7 +284,11 @@ function spawnTerminal({ type, name, cwd, role, extraArgs } = {}) {
   const agentName = pickName(name);
   let workdir = cwd ? cwd.replace(/^~/, os.homedir()) : WORKDIR;
   if (!fs.existsSync(workdir)) workdir = WORKDIR;
-  const args = extraArgs && extraArgs.length ? [...spec.args, ...extraArgs] : spec.args;
+  const roleSpec = prompt && PROMPTS[prompt] ? PROMPTS[prompt] : null;
+  // base args + orchestrator flags + (last) the positional role prompt
+  let args = spec.args;
+  if (extraArgs && extraArgs.length) args = [...args, ...extraArgs];
+  if (roleSpec) args = [...args, roleSpec.content];
 
   let proc;
   try {
@@ -278,10 +309,14 @@ function spawnTerminal({ type, name, cwd, role, extraArgs } = {}) {
   const term = {
     id, name: agentName, type: agentType, cwd: workdir, pty: proc, history: '',
     trustHandled: agentType !== 'claude',
+    promptId: roleSpec ? roleSpec.id : null,
+    promptLabel: roleSpec ? roleSpec.label : '',
     role: role === 'lead' ? 'lead' : 'worker',
-    lastDataAt: Date.now(), // updated on every chunk; powers the idle/busy heuristic
+    lastDataAt: Date.now(), // updated on every chunk (non-Claude idle fallback)
     totalBytes: 0,          // monotonic byte count (survives history truncation)
     orchTask: null,         // task text the orchestrator assigned (workers only)
+    // off-screen render of this PTY so isIdle() can read the real footer
+    screen: new HeadlessTerminal({ cols: 100, rows: 30, scrollback: 0, allowProposedApi: true }),
   };
   terminals.set(id, term);
 
@@ -293,6 +328,7 @@ function spawnTerminal({ type, name, cwd, role, extraArgs } = {}) {
     if (term.history.length > MAX_HISTORY) term.history = term.history.slice(-MAX_HISTORY);
     term.lastDataAt = Date.now();
     term.totalBytes += data.length;
+    try { term.screen.write(data); } catch { /* parser hiccup — ignore */ }
 
     if (!term.trustHandled && TRUST_RE.test(term.history.slice(-2000).replace(ANSI_RE, '').replace(/\s+/g, ''))) {
       term.trustHandled = true;
@@ -306,6 +342,7 @@ function spawnTerminal({ type, name, cwd, role, extraArgs } = {}) {
 
   proc.onExit(({ exitCode }) => {
     clearTimeout(trustTimer);
+    try { term.screen.dispose(); } catch { /* already gone */ }
     broadcast({ type: 'exit', id, code: exitCode });
     terminals.delete(id);
     // Keep the orchestrator coherent if an agent dies mid-run.
@@ -319,15 +356,18 @@ function spawnTerminal({ type, name, cwd, role, extraArgs } = {}) {
     }
   });
 
-  console.log(`  + spawned ${agentType} "${agentName}" (id ${id})${term.role === 'lead' ? ' [LEAD]' : ''} in ${workdir}`);
-  broadcast({ type: 'spawned', id, name: agentName, agentType, role: term.role, cwd: workdir });
+  console.log(`  + spawned ${agentType} "${agentName}" (id ${id})${term.role === 'lead' ? ' [LEAD]' : ''}${roleSpec ? ` [${roleSpec.label}]` : ''} in ${workdir}`);
+  broadcast({ type: 'spawned', id, name: agentName, agentType, role: term.role, promptId: term.promptId, promptLabel: term.promptLabel, cwd: workdir });
   return term;
 }
 
 function listPayload() {
   return {
     type: 'list',
-    terminals: [...terminals.values()].map((t) => ({ id: t.id, name: t.name, agentType: t.type, role: t.role || 'worker', cwd: t.cwd })),
+    terminals: [...terminals.values()].map((t) => ({
+      id: t.id, name: t.name, agentType: t.type, role: t.role || 'worker',
+      promptId: t.promptId, promptLabel: t.promptLabel, cwd: t.cwd,
+    })),
   };
 }
 
@@ -355,35 +395,33 @@ function sendCommand(term, text) {
 }
 
 // ---- Orchestrator engine (the loop: perceive → reason → act → observe) -------
-// Idle/busy detection. A naive "no output for N ms" timer is unreliable: an IDLE
-// Claude TUI still emits periodic bytes (cursor blink, footer/prompt redraws), so
-// the timer keeps thinking a finished agent is busy — and the lead then hangs
-// forever waiting on workers that are actually done. Instead we read Claude's
-// footer, which shows "esc to interrupt" the whole time it is processing and never
-// when idle at the prompt. We look only at output from the LAST tick (not the
-// accumulated history, which still holds old spinner frames), with a few ticks of
-// stickiness to ride out the gaps between spinner redraws.
-const CLAUDE_BUSY_RE   = /esctointerrupt|esctocancel/;
-const CLAUDE_FOOTER_RE = /esctointerrupt|esctocancel|shift\+?tabtocycle|\?forshortcuts|forshortcuts|automodeon|acceptedits|bypasspermissions|planmode/;
-const BUSY_STICKY_TICKS = 3;
-
-// Recompute each agent's busy/idle from the output it produced since the last tick.
-function refreshActivity() {
-  for (const t of terminals.values()) {
-    const recent = deltaSince(t, t.viewMark || 0).replace(ANSI_RE, '').replace(/\s+/g, '').toLowerCase();
-    t.viewMark = t.totalBytes;
-    if (t.type !== 'claude') continue;                                                          // other TUIs → quiet-timer
-    if (CLAUDE_BUSY_RE.test(recent)) { t.busyTicks = BUSY_STICKY_TICKS; t.claudeSeen = true; }  // actively working
-    else if (CLAUDE_FOOTER_RE.test(recent)) { t.busyTicks = 0; t.claudeSeen = true; }           // idle at the prompt
-    else if (t.busyTicks > 0) t.busyTicks--;                                                     // no footer this tick → decay
-  }
+// Idle/busy detection reads the agent's ACTUAL rendered screen (a headless xterm
+// fed the same PTY bytes), not output timing or raw byte slices. On the fully
+// rendered screen the footer is intact and unambiguous: Claude shows "esc to
+// interrupt" the whole time it is processing and never when idle at the prompt.
+function screenText(term) {
+  if (!term.screen) return '';
+  if (term._scrBytes === term.totalBytes && term._scrText !== undefined) return term._scrText; // memo until new bytes
+  const buf = term.screen.buffer.active;
+  let s = '';
+  for (let y = 0; y < term.screen.rows; y++) s += (buf.getLine(y)?.translateToString(true) || '') + '\n';
+  term._scrText = s.toLowerCase();
+  term._scrBytes = term.totalBytes;
+  return term._scrText;
 }
-
+// Footer markers prove the prompt UI has rendered (past booting); the presence of
+// "esc to interrupt" within it means the agent is actively processing.
+const FOOTER_RE = /esc to interrupt|shift\+tab to cycle|\? for shortcuts|for shortcuts|for agents|to manage|auto mode on|accept edits|plan mode|bypass permissions/;
 function isIdle(term) {
-  // Once Claude's footer has appeared, trust the interrupt-hint signal over timing.
-  if (term.type === 'claude' && term.claudeSeen) return (term.busyTicks || 0) === 0;
+  if (term.type === 'claude' && term.screen) {
+    const s = screenText(term);
+    if (s.includes('esc to interrupt')) return false; // definitely processing
+    if (FOOTER_RE.test(s)) return true;               // prompt footer up, no interrupt hint → idle
+    // footer not recognized yet (still booting / unknown UI) → fall through to timer
+  }
   return Date.now() - (term.lastDataAt || 0) > ORCH.IDLE_MS; // non-Claude / pre-boot fallback
 }
+
 function broadcastOrch() { broadcast(orchestrationPayload()); }
 function orchLog(kind, text) {
   orch.log.push({ t: Date.now(), kind, text });
@@ -579,9 +617,6 @@ function orchFinish(status, reason) {
 function orchResume() {
   if (orch.running) return;
   if (!orch.goal || !leadTerm()) { orchLog('warn', 'nothing to resume — start a new run'); broadcastOrch(); return; }
-  // Re-baseline activity views so the first tick reads current screen state, not the
-  // whole backlog accumulated during the pause (which still holds old spinner frames).
-  for (const t of terminals.values()) t.viewMark = t.totalBytes;
   orch.running = true;
   orch.status = orch.briefed ? 'running' : 'briefing';
   orch.nudged = false; // give the lead a fresh chance before any stall check
@@ -593,7 +628,6 @@ function orchResume() {
 // One pass of the loop. Runs every TICK_MS while a goal is in progress.
 function orchTick() {
   if (!orch.running) return;
-  refreshActivity();   // recompute every agent's busy/idle from the last tick's output
   const lead = leadTerm();
   if (!lead) { orchFinish('error', 'the lead agent is gone'); return; }
 
@@ -678,7 +712,7 @@ const CONTROL_SEQ = { interrupt: '\x1b', escape: '\x1b', enter: '\r', clear: '\x
 function handle(ws, msg) {
   switch (msg.type) {
     case 'spawn':
-      spawnTerminal({ type: msg.agentType, name: msg.name, cwd: msg.cwd });
+      spawnTerminal({ type: msg.agentType, name: msg.name, cwd: msg.cwd, prompt: msg.prompt });
       break;
 
     case 'input': // raw keystrokes from a focused terminal
@@ -703,7 +737,11 @@ function handle(ws, msg) {
 
     case 'resize': {
       const t = terminals.get(msg.id);
-      if (t) { try { t.pty.resize(Math.max(2, msg.cols | 0), Math.max(2, msg.rows | 0)); } catch { /* */ } }
+      if (t) {
+        const cols = Math.max(2, msg.cols | 0), rows = Math.max(2, msg.rows | 0);
+        try { t.pty.resize(cols, rows); } catch { /* */ }
+        try { t.screen.resize(cols, rows); } catch { /* */ }
+      }
       break;
     }
 
@@ -849,10 +887,11 @@ wss.on('connection', (ws) => {
     workdir: WORKDIR,
     home: os.homedir(),
     agentTypes: Object.keys(AGENT_TYPES),
+    prompts: promptList(),
     names: NAME_POOL,
   }));
   ws.send(JSON.stringify(listPayload()));
-  ws.send(JSON.stringify(orchestrationPayload())); // current fleet-wide mode
+  ws.send(JSON.stringify(orchestrationPayload())); // current orchestration state
   // Replay scrollback so a fresh/reconnecting window renders current state.
   for (const t of terminals.values()) {
     if (t.history) ws.send(JSON.stringify({ type: 'output', id: t.id, data: t.history }));
@@ -866,12 +905,13 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, () => {
-  console.log('\n  ┌─ cnos ── multi-agent fleet orchestrator ──────────────');
+  console.log('\n  ┌─ cnos ── voice-controlled Claude agent fleet ─────────');
   console.log(`  │  open    http://localhost:${PORT}   (use Chrome for voice)`);
   console.log(`  │  workdir ${WORKDIR}`);
   for (const [type, spec] of Object.entries(AGENT_TYPES)) {
     console.log(`  │  ${type.padEnd(7)}${spec.bin} ${spec.args.join(' ')}`.trimEnd());
   }
+  console.log(`  │  prompts ${Object.keys(PROMPTS).join(', ') || '(none found in prompts/)'}`);
   console.log(`  │  voice   ${WHISPER_BIN ? WHISPER_BIN + ' + ' + path.basename(WHISPER_MODEL) : 'whisper NOT found'}`);
   console.log('  └────────────────────────────────────────────────────────\n');
 });

@@ -86,6 +86,8 @@ body { display: flex; flex-direction: column; }
   cursor: pointer;
 }
 .typesel:focus { outline: none; border-color: var(--accent); }
+.promptlabel { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.promptsel { max-width: 170px; }
 .btn.icon { padding: 10px 12px; font-size: 15px; line-height: 1; }
 #diag[hidden] { display: none; }
 .btn {
@@ -246,7 +248,6 @@ body.orchestrating #bar { border-bottom-color: var(--accent); }
 .orch-run { background: var(--accent-2); color: #07120d; border: none; }
 .orch-run:hover { filter: brightness(1.08); border-color: transparent; }
 .orch-run.stop { background: var(--danger); color: #1a0808; }
-/* secondary "Start fresh" look, shown next to Resume */
 .orch-run.ghost { background: var(--panel-2); color: var(--muted); border: 1px solid var(--line); }
 .orch-run.ghost:hover { color: var(--text); border-color: var(--accent); filter: none; }
 .orch-status { font-size: 12px; color: var(--muted); font-style: italic; }
@@ -620,6 +621,7 @@ html.mobile .term { -webkit-overflow-scrolling: touch; }
   .card-bar .cwd { max-width: 110px; }
 
   .orch-cols { grid-template-columns: 1fr; }   /* stack fleet status + feed on phones */
+
 
   #diag { left: 8px; right: 8px; bottom: 8px; width: auto; }
 }

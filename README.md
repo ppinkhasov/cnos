@@ -3,8 +3,9 @@
 Your own command a fleet of AI coding agents with your voice.
 
 cnos launches a grid of real agent terminals — **claude, codex, hermes** —
-each with its own call sign (`jack`, `zulu`, `echo`, …) — and lets you orchestrate
-them by voice or text. Claude starts in **auto mode** with **max effort**:
+each with its own call sign (`jack`, `zulu`, `echo`, …) — and lets you drive them
+by voice or text, optionally preloaded with a specialist **role** prompt. Claude
+starts in **auto mode** with **max effort**:
 
 ```
 claude --permission-mode auto --effort max
@@ -60,10 +61,9 @@ message. Override any type with `CNOS_<TYPE>_BIN` and `CNOS_<TYPE>_ARGS`.
 
 The **📁 folder button** in the top bar picks the directory new agents spawn into —
 click it to browse (or paste a path / `~/dev/app`, then **Use this folder**). It
-applies to every new agent: manual **+ Add**, voice *"new terminal"*, and the whole
-orchestrator fleet (lead + workers). The choice is remembered across reloads; the
-default is `CNOS_WORKDIR` (your home dir). Each agent card shows the directory it's
-running in.
+applies to every new agent (manual **+ Add** and voice *"new terminal"*). The
+choice is remembered across reloads; the default is `CNOS_WORKDIR` (your home dir).
+Each agent card shows the directory it's running in.
 
 ## Voice grammar
 
@@ -72,12 +72,38 @@ running in.
 [hey] <agent|everyone> stop|cancel|pause         → stop the current task (Esc)
 [hey] <agent|everyone> clear|erase|scratch that  → wipe typed-but-unsent input
 [hey] <agent|everyone> enter|go|submit           → just press Enter
-new|add|spawn <claude|codex|hermes> …            → launch that agent type
+new|add|spawn <claude|codex|hermes> [role]       → launch an agent (optionally in a role)
+new terminal, programmer                         → launch preloaded with the “programmer” role
 ```
 
 The first word is the target. `everyone`, `all`, `team`, `fleet` broadcast.
 Voice is hands-free: it auto-detects when you start and stop talking (VAD),
 records the clip, and transcribes it with Whisper.
+
+## Loop prompts
+
+Launch any agent **preloaded with a prompt** so it boots straight into a mode or
+role. Pick one in the top-bar **Loop Prompt** selector before **+ Add**, or say it —
+e.g. *"new terminal, loop"* or *"new codex terminal, architect"*. The prompt is
+passed as the agent's first/original prompt, and the agent card shows a badge. The
+generic **loop** prompt is ours; the rest are the poc-engineering roles from
+[mitsuhiko/agent-prompts](https://github.com/mitsuhiko/agent-prompts/tree/main/poc-engineering).
+
+Bundled prompts (files live in `prompts/`):
+
+| Say | Prompt | Prompt file |
+| --- | ------ | ----------- |
+| `loop` / `iterate` / `auto` | Loop | `loop_agent` — generic non-stop work loop |
+| `orchestrator` / `manager` | Orchestrator | `orchestrator_agent` — delegates to managers → subagents, re-evaluates, repeats |
+| `programmer` | Programmer | `implementation_agent` |
+| `architect` | Architect | `software_architect_agent` |
+| `designer` / `architecture` | Architecture | `architecture_design_agent` |
+| `analyst` | Analyst | `problem_analysis_agent` |
+| `planner` / `plan` | Planner | `detailed_planning_agent` |
+| `breakdown` / `tasks` | Task breakdown | `task_breakdown_agent` |
+| `lead` / `research` | Research lead | `programming_lead_agent` |
+
+Add your own: drop a `.md` into `prompts/` and register it in `PROMPT_SPECS` (`server.js`).
 
 ## Orchestrate (goal → fleet)
 
@@ -86,17 +112,19 @@ Flip **Orchestrate** on, type a **goal**, and press **Start**. cnos spawns a
 *perceive → reason → act → observe* loop until the goal is met:
 
 - The **lead** (a Claude agent) breaks the goal into subtasks and delegates them,
-  emitting `@@CNOS` directives the server reads from its terminal.
-- The server **dispatches** each task to an idle worker, **watches** for it to go
-  quiet (done), and **reports** the result back to the lead.
+  appending `{"action":"assign",…}` directives to `.cnos/orders.jsonl` (the server
+  tails that file — exact bytes, not screen-scraping).
+- The server **dispatches** each task to an idle worker, detects when it's done by
+  reading the worker's rendered screen (a headless xterm — "esc to interrupt" in the
+  footer means busy), and **reports** the result back to the lead.
 - When every worker is busy and work remains, cnos **auto-spawns** another worker
   (up to the **Max** cap). It stops when the lead declares the goal complete.
 
-You set the **goal**, the worker **type**, how many **workers** to start with
-(default 3), and the **Max** agent cap (default 8). A live panel shows each
-agent's state and an activity feed of the lead's decisions; **Stop** halts the
-loop and leaves the agents running. The lead is always a `claude` agent (it needs
-the directive protocol); override its model/flags with `CNOS_LEAD_ARGS`.
+You set the **goal**, worker **type**, **Workers** to start with (default 3), and the
+**Max** agent cap (default 8). A live panel shows each agent's state and an activity
+feed of the lead's decisions. **Stop** halts the loop but leaves the agents running;
+**Resume** picks the loop back up and catches up on anything they finished while
+paused. The lead is always `claude`; override its model/flags with `CNOS_LEAD_ARGS`.
 
 ## Configuration
 

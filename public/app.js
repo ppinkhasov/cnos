@@ -1,4 +1,4 @@
-/* cnos front-end: a grid of live Claude terminals + voice control. */
+/* cnos front-end: a grid of live terminals (shells + agents) + voice control. */
 
 const FleetEl   = document.getElementById('fleet');
 const EmptyEl   = document.getElementById('empty');
@@ -6,24 +6,6 @@ const TargetEl  = document.getElementById('target');
 const HeardEl   = document.getElementById('heard');
 const CardTpl   = document.getElementById('card-tpl');
 const PromptSel = document.getElementById('promptSel'); // role-prompt picker for new agents
-
-const OrchToggle  = document.getElementById('orchToggle');
-const OrchPanel   = document.getElementById('orchPanel');
-const OrchGoal    = document.getElementById('orchGoal');
-const OrchType    = document.getElementById('orchType');
-const OrchWorkers = document.getElementById('orchWorkers');
-const OrchMax     = document.getElementById('orchMax');
-const OrchRun     = document.getElementById('orchRun');
-const OrchResume  = document.getElementById('orchResume');
-const OrchStatus  = document.getElementById('orchStatus');
-const OrchLoop    = document.getElementById('orchLoop');
-const OrchPhase   = document.getElementById('orchPhase');
-const OrchRound   = document.getElementById('orchRound');
-const OrchAgents  = document.getElementById('orchAgents');
-const OrchFleet   = document.getElementById('orchFleet');
-const OrchFeed    = document.getElementById('orchFeed');
-const OrchWorkdir = document.getElementById('orchWorkdir');
-const OrchWorkdirStat = document.getElementById('orchWorkdirStat');
 
 const TERM_THEME = {
   background: '#141821', foreground: '#e6e9ef', cursor: '#7c9cff',
@@ -40,7 +22,6 @@ const agents = new Map();
 let ws = null;
 let pendingSpawnAnnounce = false; // set when a spawn was requested by voice
 let promptAliases = {};           // spoken alias -> role-prompt id (from the server's hello)
-let orchState = { enabled: false, running: false, status: 'idle', fleet: [], log: [] }; // mirrors server
 let fleetLayoutFrame = 0;
 
 function queueFleetLayout() {
@@ -199,10 +180,6 @@ function dispatch(msg) {
     case 'routed':  flashRouted(msg); break;
     case 'spawn-error': note(escapeHtml(msg.message), 'warn'); break;
     case 'speaking':   setSpeaking(msg.on, msg.name); break;
-    case 'orchestration':
-      orchState = msg; // full server snapshot (enabled, running, status, fleet, log, …)
-      renderOrchestration();
-      break;
   }
 }
 
@@ -220,9 +197,9 @@ function syncList(list) {
 }
 
 // ---- Cards / terminals ------------------------------------------------------
-function ensureCard({ id, name, agentType, role, promptLabel, cwd }) {
+function ensureCard({ id, name, agentType, promptLabel, cwd }) {
   let a = agents.get(id);
-  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; if (role) a.role = role; if (promptLabel !== undefined) a.promptLabel = promptLabel; paintHeader(a); refreshTargets(); return a; }
+  if (a) { a.name = name; a.cwd = cwd; if (agentType) a.agentType = agentType; if (promptLabel !== undefined) a.promptLabel = promptLabel; paintHeader(a); refreshTargets(); return a; }
 
   const el = CardTpl.content.firstElementChild.cloneNode(true);
   const termEl = el.querySelector('.term');
@@ -245,7 +222,7 @@ function ensureCard({ id, name, agentType, role, promptLabel, cwd }) {
   const ro = new ResizeObserver(() => requestAnimationFrame(doFit));
   ro.observe(termEl);
 
-  a = { id, name, agentType: agentType || 'claude', role: role || 'worker', promptLabel: promptLabel || '', cwd, exited: false, term, fit, ro, el };
+  a = { id, name, agentType: agentType || 'shell', promptLabel: promptLabel || '', cwd, exited: false, term, fit, ro, el };
   agents.set(id, a);
 
   el.querySelector('.interrupt').onclick = () => send({ type: 'control', target: name, action: 'interrupt' });
@@ -267,10 +244,8 @@ function paintHeader(a) {
   const typeEl = a.el.querySelector('.type');
   if (typeEl) { typeEl.textContent = a.agentType || ''; typeEl.dataset.type = a.agentType || ''; }
   const roleEl = a.el.querySelector('.role');
-  const badge = a.role === 'lead' ? 'LEAD' : (a.promptLabel || ''); // orchestrator lead, else role-prompt
-  if (roleEl) { roleEl.textContent = badge; roleEl.hidden = !badge; }
-  a.el.classList.toggle('lead', a.role === 'lead');
-  a.el.classList.toggle('roled', !!a.promptLabel && a.role !== 'lead');
+  if (roleEl) { roleEl.textContent = a.promptLabel || ''; roleEl.hidden = !a.promptLabel; } // role-prompt badge
+  a.el.classList.toggle('roled', !!a.promptLabel);
   const cwd = a.el.querySelector('.cwd');
   cwd.textContent = a.cwd.replace(/^.*\//, '…/') || a.cwd;
   cwd.title = a.cwd;
@@ -354,124 +329,6 @@ function populatePrompts(list) {
 // (the default "▶ everyone" → all agents). Mirrors saying "everyone, clear".
 document.getElementById('clearBtn').onclick = () => send({ type: 'control', target: TargetEl.value, action: 'clear' });
 
-// ---- Orchestration: goal-driven, auto-scaling lead-agent loop ---------------
-// OFF keeps cnos exactly as it is — you route commands yourself. ON reveals the
-// goal panel: set a goal + Start and the server spawns a lead agent + workers and
-// runs the loop, streaming live fleet status + an activity feed back here.
-const clampInt = (v, lo, hi, dflt) => {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : dflt;
-};
-
-function statusHint(status, running, resumable) {
-  switch (status) {
-    case 'briefing': return 'spawning agents and briefing the lead…';
-    case 'running':  return 'lead is delegating — agents working…';
-    case 'done':     return '✓ goal complete';
-    case 'stopped':  return resumable ? 'stopped — click Resume to continue (agents are still running)' : 'stopped';
-    case 'stalled':  return resumable ? 'stalled — Resume to retry, or Start fresh' : 'stalled — the lead stopped issuing tasks';
-    case 'error':    return 'error — see the activity feed';
-    default:         return running ? 'running…' : 'set a goal, then Start — spawns a lead + workers and runs the loop';
-  }
-}
-
-const STATE_LABEL = { idle: 'idle', working: 'working', busy: 'busy', thinking: 'thinking' };
-function renderFleet(fleet) {
-  OrchFleet.innerHTML = fleet.map((f) => {
-    const role = f.role === 'lead'
-      ? '<span class="of-role lead">lead</span>'
-      : `<span class="of-role">${escapeHtml(f.agentType || 'worker')}</span>`;
-    const task = f.task
-      ? `<span class="of-task" title="${escapeHtml(f.task)}">${escapeHtml(f.task)}</span>`
-      : '<span class="of-idle">—</span>';
-    return `<div class="of-row" data-state="${escapeHtml(f.state)}"><span class="of-dot"></span>`
-      + `<span class="of-name">${escapeHtml(f.name)}</span>${role}`
-      + `<span class="of-state">${STATE_LABEL[f.state] || escapeHtml(f.state)}</span>${task}</div>`;
-  }).join('') || '<div class="of-empty">no agents yet</div>';
-}
-
-const FEED_ICON = { start: '▶', resume: '↻', plan: '📋', assign: '➡', lead: '🧠', done: '✓', spawn: '＋',
-                    note: '·', warn: '⚠', stalled: '■', stopped: '■', error: '✕' };
-function renderFeed(log) {
-  // newest first
-  OrchFeed.innerHTML = log.slice().reverse().map((e) =>
-    `<div class="ofeed-line ofeed-${escapeHtml(e.kind)}"><span class="ofeed-ic">${FEED_ICON[e.kind] || '·'}</span>`
-    + `<span class="ofeed-tx">${escapeHtml(e.text)}</span></div>`
-  ).join('');
-}
-
-function renderOrchestration() {
-  const on = !!orchState.enabled;
-  OrchToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
-  OrchToggle.querySelector('.orch-state').textContent = on ? 'ON' : 'OFF';
-  OrchPanel.hidden = !on;
-  document.body.classList.toggle('orchestrating', on);
-  if (!on) return;
-
-  const running = !!orchState.running;
-  // Reflect server config, but never yank a field the user is mid-edit.
-  const ae = document.activeElement;
-  if (ae !== OrchGoal && typeof orchState.goal === 'string') OrchGoal.value = orchState.goal;
-  if (ae !== OrchType && orchState.workerType) OrchType.value = orchState.workerType;
-  if (ae !== OrchWorkers && orchState.startWorkers) OrchWorkers.value = orchState.startWorkers;
-  if (ae !== OrchMax && orchState.maxAgents) OrchMax.value = orchState.maxAgents;
-  for (const el of [OrchGoal, OrchType, OrchWorkers, OrchMax]) el.disabled = running; // lock while running
-
-  // Three button states: Stop (running) · Resume + Start-fresh (stopped, agents alive) · Start (idle)
-  const resumable = !!orchState.resumable;
-  OrchResume.hidden = !resumable;
-  if (running) {
-    OrchRun.textContent = '■ Stop'; OrchRun.classList.toggle('stop', true); OrchRun.classList.toggle('ghost', false);
-  } else if (resumable) {
-    OrchRun.textContent = '↻ Start fresh'; OrchRun.classList.toggle('stop', false); OrchRun.classList.toggle('ghost', true);
-  } else {
-    OrchRun.textContent = '▶ Start'; OrchRun.classList.toggle('stop', false); OrchRun.classList.toggle('ghost', false);
-  }
-  OrchStatus.textContent = statusHint(orchState.status, running, resumable);
-
-  const fleet = orchState.fleet || [], log = orchState.log || [];
-  const show = running || fleet.length || log.length;
-  OrchLoop.hidden = !show;
-  if (show) {
-    OrchPhase.textContent = orchState.status || 'idle';
-    OrchPhase.dataset.status = orchState.status || 'idle';
-    OrchRound.textContent = orchState.round || 0;
-    OrchAgents.textContent = `${orchState.agents || 0}/${orchState.maxAgents || 8}`;
-    if (orchState.workdir) { OrchWorkdir.textContent = cwdShort(orchState.workdir); OrchWorkdir.title = orchState.workdir; OrchWorkdirStat.hidden = false; }
-    else OrchWorkdirStat.hidden = true;
-    renderFleet(fleet);
-    renderFeed(log);
-  }
-}
-
-OrchToggle.onclick = () => send({ type: 'set-orchestration', enabled: !orchState.enabled });
-
-OrchRun.onclick = () => {
-  if (orchState.running) { send({ type: 'orchestrate-stop' }); return; }
-  const goal = OrchGoal.value.trim();
-  if (!goal) { OrchStatus.textContent = 'enter a goal first'; OrchGoal.focus(); return; }
-  send({ type: 'orchestrate-start', goal,
-    workerType: OrchType.value,
-    workdir: currentWorkdir || undefined,
-    startWorkers: clampInt(OrchWorkers.value, 1, 12, 3),
-    maxAgents: clampInt(OrchMax.value, 2, 16, 8) });
-};
-
-OrchResume.onclick = () => send({ type: 'orchestrate-resume' });
-
-// Persist config edits so every open tab shares one setup (server ignores while running).
-function pushOrchConfig() {
-  send({ type: 'set-orchestration', config: {
-    goal: OrchGoal.value.trim(),
-    workerType: OrchType.value,
-    startWorkers: clampInt(OrchWorkers.value, 1, 12, 3),
-    maxAgents: clampInt(OrchMax.value, 2, 16, 8),
-  } });
-}
-OrchGoal.addEventListener('change', pushOrchConfig);
-OrchType.addEventListener('change', pushOrchConfig);
-OrchWorkers.addEventListener('change', pushOrchConfig);
-OrchMax.addEventListener('change', pushOrchConfig);
 
 // ---- Voice control ----------------------------------------------------------
 const BROADCAST = new Set(['everyone', 'all', 'team', 'fleet', 'everybody', 'guys']);
@@ -507,10 +364,11 @@ function parseVoice(transcript) {
   const phrase = tokens.join(' ').toLowerCase();
   if (SPAWN_VERB.test(phrase) && SPAWN_NOUN.test(phrase)) {
     const m = phrase.match(AGENT_TYPE_RE);
-    // a role name anywhere in the phrase preloads that prompt, e.g. "new terminal, programmer"
+    // a role name anywhere in the phrase preloads that prompt, e.g. "new claude terminal, programmer"
     let prompt;
     for (const tok of tokens) { const id = promptAliases[clean(tok)]; if (id) { prompt = id; break; } }
-    return { global: 'spawn', agentType: m ? m[1] : 'claude', prompt };
+    // "new terminal" → a blank shell; an agent type must be named explicitly.
+    return { global: 'spawn', agentType: m ? m[1] : 'shell', prompt };
   }
 
   const head = clean(tokens[0]);
@@ -537,7 +395,7 @@ function routeVoice(parsed, transcript) {
     pendingSpawnAnnounce = true;
     send({ type: 'spawn', agentType: parsed.agentType, cwd: currentWorkdir || undefined, prompt: parsed.prompt });
     const role = parsed.prompt ? ` as <b>${escapeHtml(parsed.prompt)}</b>` : '';
-    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new ${parsed.agentType} agent${role}…</span>`);
+    note(`heard <b>${escapeHtml(transcript)}</b> → <span class="route">launching a new ${parsed.agentType} terminal${role}…</span>`);
     return;
   }
   if (parsed.error) {

@@ -6,7 +6,6 @@ struct ContentView: View {
     @EnvironmentObject var settings: AppSettings
     @StateObject private var voice: VoiceController
 
-    @State private var showOrchestrator = false
     @State private var showWorkdir = false
     @State private var command = ""
 
@@ -31,7 +30,6 @@ struct ContentView: View {
         }
         .background(Theme.bg.ignoresSafeArea())
         .overlay(alignment: .top) { noticeBanner }
-        .sheet(isPresented: $showOrchestrator) { OrchestratorView(store: store) }
         .sheet(isPresented: $showWorkdir) { WorkdirPickerView(store: store).environmentObject(settings) }
     }
 
@@ -47,9 +45,6 @@ struct ContentView: View {
                     .font(.caption).foregroundStyle(Theme.muted).lineLimit(1)
                 Spacer()
                 micButton
-                Button { showOrchestrator = true } label: {
-                    Image(systemName: "circle.grid.cross").font(.system(size: 18))
-                }.foregroundStyle(store.orchestration.running ? Theme.green : Theme.text)
             }
 
             HStack(spacing: 8) {
@@ -60,10 +55,6 @@ struct ContentView: View {
                 }
                 .buttonStyle(ChipButtonStyle())
                 Spacer()
-                if store.orchestration.running {
-                    Text("orchestrating · \(store.orchestration.status)")
-                        .font(.caption2).foregroundStyle(Theme.green).lineLimit(1)
-                }
             }
         }
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 8)
@@ -81,9 +72,9 @@ struct ContentView: View {
                 Button { store.spawn(type: type) } label: { Label("New \(type)", systemImage: "plus") }
             }
             if !store.prompts.isEmpty {
-                Menu("With role…") {
+                Menu("New claude with role…") {   // role prompts apply to agents, not blank shells
                     ForEach(store.prompts) { p in
-                        Button(p.label) { store.spawn(type: store.agentTypes.first ?? "claude", prompt: p.id) }
+                        Button(p.label) { store.spawn(type: "claude", prompt: p.id) }
                     }
                 }
             }
@@ -111,8 +102,8 @@ struct ContentView: View {
         VStack(spacing: 14) {
             Spacer()
             Image(systemName: "terminal").font(.system(size: 44)).foregroundStyle(Theme.muted)
-            Text("No agents yet").font(.headline).foregroundStyle(Theme.text)
-            Text("Tap **Add** to spawn one, or say “new terminal”.")
+            Text("No terminals yet").font(.headline).foregroundStyle(Theme.text)
+            Text("Tap **Add** for a blank shell, or say “new claude terminal”.")
                 .font(.callout).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
             Spacer()
         }

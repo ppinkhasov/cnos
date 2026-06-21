@@ -29,10 +29,10 @@ final class ProtocolTests: XCTestCase {
     }
 
     func testSpawned() throws {
-        let m = try decode(#"{"type":"spawned","id":"2","name":"zulu","agentType":"codex","role":"lead","promptId":"loop","promptLabel":"Loop","cwd":"/tmp"}"#)
+        let m = try decode(#"{"type":"spawned","id":"2","name":"zulu","agentType":"codex","promptId":"loop","promptLabel":"Loop","cwd":"/tmp"}"#)
         guard case let .spawned(t) = m else { return XCTFail("not spawned") }
         XCTAssertEqual(t.id, "2")
-        XCTAssertEqual(t.role, "lead")
+        XCTAssertEqual(t.agentType, "codex")
         XCTAssertEqual(t.promptLabel, "Loop")
     }
 
@@ -58,16 +58,6 @@ final class ProtocolTests: XCTestCase {
         if case let .spawnError(msg) = try decode(#"{"type":"spawn-error","message":"codex is not installed"}"#) {
             XCTAssertEqual(msg, "codex is not installed")
         } else { XCTFail("not spawn-error") }
-    }
-
-    func testOrchestration() throws {
-        let json = #"{"type":"orchestration","enabled":true,"running":true,"resumable":false,"status":"running","goal":"build app","workerType":"claude","workdir":"/tmp","startWorkers":3,"maxAgents":8,"round":2,"agents":4,"fleet":[{"id":"1","name":"jack","role":"lead","agentType":"claude","state":"thinking","task":""}],"log":[{"t":123,"kind":"start","text":"goal set"}]}"#
-        guard case let .orchestration(o) = try decode(json) else { return XCTFail("not orchestration") }
-        XCTAssertTrue(o.running)
-        XCTAssertEqual(o.status, "running")
-        XCTAssertEqual(o.maxAgents, 8)
-        XCTAssertEqual(o.fleet.first?.state, "thinking")
-        XCTAssertEqual(o.log.first?.kind, "start")
     }
 
     func testUnknownType() throws {
@@ -101,23 +91,10 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(rz["rows"] as? Int, 24)
     }
 
-    func testEncodeOrchestrate() throws {
-        let s = try dict(.orchestrateStart(goal: "g", workerType: "codex", workdir: "/w", startWorkers: 3, maxAgents: 8))
-        XCTAssertEqual(s["type"] as? String, "orchestrate-start")
-        XCTAssertEqual(s["goal"] as? String, "g")
-        XCTAssertEqual(s["startWorkers"] as? Int, 3)
-
-        let set = try dict(.setOrchestration(enabled: true, config: nil))
-        XCTAssertEqual(set["type"] as? String, "set-orchestration")
-        XCTAssertEqual(set["enabled"] as? Bool, true)
-        XCTAssertNil(set["config"])
-
-        let cfg = try dict(.setOrchestration(config: OrchConfig(goal: "g", workerType: "claude", startWorkers: 2, maxAgents: 6)))
-        let nested = cfg["config"] as? [String: Any]
-        XCTAssertEqual(nested?["goal"] as? String, "g")
-        XCTAssertEqual(nested?["maxAgents"] as? Int, 6)
-
+    func testEncodeListAndKill() throws {
         XCTAssertEqual(try dict(.list)["type"] as? String, "list")
-        XCTAssertEqual(try dict(.orchestrateStop)["type"] as? String, "orchestrate-stop")
+        let k = try dict(.kill(id: "9"))
+        XCTAssertEqual(k["type"] as? String, "kill")
+        XCTAssertEqual(k["id"] as? String, "9")
     }
 }

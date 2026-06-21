@@ -15,7 +15,6 @@ final class AgentModel: ObservableObject, Identifiable {
     let id: String
     @Published var name: String
     @Published var type: String
-    @Published var role: String          // worker | lead
     @Published var promptLabel: String
     @Published var cwd: String
     @Published var exited = false
@@ -28,8 +27,7 @@ final class AgentModel: ObservableObject, Identifiable {
     init(_ t: TerminalInfo) {
         id = t.id
         name = t.name
-        type = t.agentType ?? "claude"
-        role = t.role ?? "worker"
+        type = t.agentType ?? "shell"
         promptLabel = t.promptLabel ?? ""
         cwd = t.cwd ?? ""
     }
@@ -37,7 +35,6 @@ final class AgentModel: ObservableObject, Identifiable {
     func update(_ t: TerminalInfo) {
         name = t.name
         if let a = t.agentType { type = a }
-        if let r = t.role { role = r }
         if let p = t.promptLabel { promptLabel = p }
         if let c = t.cwd { cwd = c }
     }
@@ -48,12 +45,12 @@ final class AgentModel: ObservableObject, Identifiable {
         liveOutput.send(data)
     }
 
-    var badge: String { role == "lead" ? "LEAD" : promptLabel }
+    var badge: String { promptLabel }
     var cwdShort: String { cwd.split(separator: "/").last.map(String.init) ?? cwd }
 }
 
-/// The live mirror of one cnos server: connection state, the agent fleet, the
-/// orchestration snapshot, and usage — assembled from the CnosKit event stream.
+/// The live mirror of one cnos server: connection state, the terminal fleet,
+/// and usage — assembled from the CnosKit event stream.
 final class FleetStore: ObservableObject {
     let client: CnosClient
     private let settings: AppSettings
@@ -61,7 +58,6 @@ final class FleetStore: ObservableObject {
     @Published private(set) var connected = false
     @Published private(set) var connecting = true
     @Published private(set) var agents: [AgentModel] = []
-    @Published private(set) var orchestration = Orchestration.empty
     @Published private(set) var hello: Hello?
     @Published var usage: UsageData?
     @Published var notice: Notice?
@@ -105,7 +101,7 @@ final class FleetStore: ObservableObject {
         for p in hello?.prompts ?? [] { for a in p.aliases { m[a] = p.id } }
         return m
     }
-    var agentTypes: [String] { hello?.agentTypes ?? ["claude", "codex", "hermes"] }
+    var agentTypes: [String] { hello?.agentTypes ?? ["shell", "claude", "codex", "hermes"] }
     var prompts: [PromptInfo] { hello?.prompts ?? [] }
     var currentWorkdir: String? { settings.workdir.isEmpty ? nil : settings.workdir }
 
@@ -148,8 +144,6 @@ final class FleetStore: ObservableObject {
             notify(msg, isError: true)
         case .speaking(let on, _):
             setSpeaking(on)
-        case .orchestration(let o):
-            orchestration = o
         case .unknown:
             break
         }
@@ -230,7 +224,7 @@ final class FleetStore: ObservableObject {
             notify("heard “\(transcript)” — start with an agent name, “everyone”, or “new terminal”", isError: true)
         case .spawn(let type, let prompt):
             spawn(type: type, prompt: prompt, announce: true)
-            notify("heard “\(transcript)” → launching a \(type) agent…")
+            notify("heard “\(transcript)” → launching a \(type) terminal…")
         case .select(let t):
             target = t
             notify("heard “\(transcript)” → \(label(t)) is now the target")
@@ -245,17 +239,6 @@ final class FleetStore: ObservableObject {
         }
     }
     private func label(_ t: String) -> String { t == "all" ? "everyone" : t }
-
-    // MARK: Orchestration
-
-    func toggleOrchestration() { client.send(.setOrchestration(enabled: !orchestration.enabled, config: nil)) }
-    func pushOrchConfig(_ c: OrchConfig) { client.send(.setOrchestration(enabled: nil, config: c)) }
-    func startOrchestration(goal: String, workerType: String, startWorkers: Int, maxAgents: Int) {
-        client.send(.orchestrateStart(goal: goal, workerType: workerType, workdir: currentWorkdir,
-                                      startWorkers: startWorkers, maxAgents: maxAgents))
-    }
-    func stopOrchestration() { client.send(.orchestrateStop) }
-    func resumeOrchestration() { client.send(.orchestrateResume) }
 
     // MARK: Usage
 

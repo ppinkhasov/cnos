@@ -30,12 +30,6 @@
       <span class="tag">command your fleet</span>
     </div>
 
-    <button id="orchToggle" class="orch-toggle" type="button" aria-pressed="false"
-            title="Auto-orchestrate — set a goal and let a lead agent spawn & delegate to a fleet of workers until it's done">
-      <span class="orch-light"></span>
-      <span class="orch-text">Orchestrate <b class="orch-state">OFF</b></span>
-    </button>
-
     <form id="cmdForm" class="cmd">
       <select id="target" title="Who to send to"></select>
       <input id="cmdInput" type="text" autocomplete="off"
@@ -52,7 +46,8 @@
               title="Working directory for new agents — click to change">
         <span class="cwd-ic">📁</span><span class="cwd-label">~</span>
       </button>
-      <select id="agentType" class="typesel" title="Agent type to spawn">
+      <select id="agentType" class="typesel" title="Terminal type — “shell” is a blank terminal (the default)">
+        <option value="shell">shell</option>
         <option value="claude">claude</option>
         <option value="codex">codex</option>
         <option value="hermes">hermes</option>
@@ -70,58 +65,21 @@
     </div>
   </header>
 
-  <!-- Orchestration panel — revealed only when the Orchestrate toggle is ON.
-       Set a goal + Start → cnos spawns a lead + workers and runs the
-       perceive→reason→act→observe loop, auto-adding workers when all are busy. -->
-  <div id="orchPanel" class="orch-panel" hidden>
-    <div class="orch-row">
-      <span class="orch-badge">🤖 Auto-orchestrate</span>
-      <input id="orchGoal" class="orch-goal" type="text" autocomplete="off"
-             placeholder="Goal for the fleet — e.g. “build a REST API for a notes app, with tests and a README”" />
-      <label class="orch-field">Type
-        <select id="orchType">
-          <option value="claude">claude</option>
-          <option value="codex">codex</option>
-          <option value="hermes">hermes</option>
-        </select>
-      </label>
-      <label class="orch-field">Workers <input id="orchWorkers" type="number" min="1" max="12" value="3" /></label>
-      <label class="orch-field">Max <input id="orchMax" type="number" min="2" max="16" value="8" /></label>
-      <button id="orchResume" class="btn orch-run" type="button" hidden
-              title="Resume the run where it left off — the agents kept working while it was stopped">▶ Resume</button>
-      <button id="orchRun" class="btn orch-run" type="button"
-              title="Spawn a lead agent + workers and run the goal loop until the lead declares it done">▶ Start</button>
-      <span id="orchStatus" class="orch-status">set a goal, then Start — spawns a lead + workers and runs the loop</span>
-    </div>
-    <div id="orchLoop" class="orch-loop" hidden>
-      <div class="orch-meta">
-        <span id="orchPhase" class="orch-phase" data-status="idle">idle</span>
-        <span class="orch-stat">round <b id="orchRound">0</b></span>
-        <span class="orch-stat"><b id="orchAgents">0/8</b> agents</span>
-        <span class="orch-stat" id="orchWorkdirStat" hidden>📁 <b id="orchWorkdir">~</b></span>
-        <span class="orch-hint">the lead (🧠) decomposes the goal and delegates; cnos auto-adds workers when all are busy</span>
-      </div>
-      <div class="orch-cols">
-        <div id="orchFleet" class="orch-fleet"></div>
-        <div id="orchFeed" class="orch-feed"></div>
-      </div>
-    </div>
-  </div>
-
   <div id="usage" class="usage" title="API usage by provider — click to refresh"></div>
 
   <div id="heard" class="heard" hidden></div>
 
   <main id="fleet">
     <div id="empty" class="empty">
-      <h1>No agents yet</h1>
-      <p>Pick a type (and optionally a <b>role</b>) and click <b>+ Add</b> — or say
-         <i>“new terminal”</i> or <i>“new terminal, programmer”</i>… Claude starts in
+      <h1>No terminals yet</h1>
+      <p>Click <b>+ Add</b> (or say <i>“new terminal”</i>) for a blank shell. For a
+         coding agent, pick a type — or say <i>“new claude terminal”</i> /
+         <i>“new codex terminal”</i>. Claude starts in
          <code>--permission-mode auto --effort max</code> and each gets a call sign
          like <b>jack</b> or <b>zulu</b>.</p>
-      <p class="hint">A role preloads a specialist prompt (programmer, architect, planner,
-         analyst, …). Then hit <b>🎙 Listen</b> and say
-         <i>“jack, build a todo app”</i> or <i>“everyone, commit your work”</i>.</p>
+      <p class="hint">Add a role with the <b>Loop&nbsp;Prompt</b> picker, or by voice
+         (<i>“new claude terminal, programmer”</i>). Then hit <b>🎙 Listen</b> and say
+         <i>“jack, build a todo app”</i> or <i>“everyone, run the tests”</i>.</p>
     </div>
   </main>
 

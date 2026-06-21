@@ -72,7 +72,8 @@ public enum VoiceGrammar {
 
         let phrase = tokens.joined(separator: " ").lowercased()
         if matches(spawnVerb, phrase) && matches(spawnNoun, phrase) {
-            let type = firstMatch(agentTypeRE, phrase) ?? "claude"
+            // "new terminal" → a blank shell; an agent type must be named explicitly.
+            let type = firstMatch(agentTypeRE, phrase) ?? "shell"
             var prompt: String?
             for tok in tokens { if let id = promptAliases[clean(tok)] { prompt = id; break } }
             return .spawn(agentType: type, prompt: prompt)

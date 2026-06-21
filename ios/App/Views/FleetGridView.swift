@@ -48,7 +48,6 @@ struct AgentCardView: View {
 
     private var borderColor: Color {
         if agent.routedFlash { return Theme.accent }
-        if agent.role == "lead" { return Theme.yellow.opacity(0.6) }
         if isTarget { return Theme.accent.opacity(0.7) }
         return Theme.border
     }

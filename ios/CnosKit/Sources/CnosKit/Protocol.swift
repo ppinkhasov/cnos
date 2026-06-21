@@ -11,14 +11,13 @@ public struct TerminalInfo: Codable, Sendable, Identifiable, Hashable {
     public let id: String
     public var name: String
     public var agentType: String?
-    public var role: String?
     public var promptId: String?
     public var promptLabel: String?
     public var cwd: String?
 
-    public init(id: String, name: String, agentType: String? = nil, role: String? = nil,
+    public init(id: String, name: String, agentType: String? = nil,
                 promptId: String? = nil, promptLabel: String? = nil, cwd: String? = nil) {
-        self.id = id; self.name = name; self.agentType = agentType; self.role = role
+        self.id = id; self.name = name; self.agentType = agentType
         self.promptId = promptId; self.promptLabel = promptLabel; self.cwd = cwd
     }
 }
@@ -39,48 +38,6 @@ public struct Hello: Codable, Sendable {
     public var names: [String]
 }
 
-/// One agent's live state inside the orchestration snapshot.
-public struct FleetAgent: Codable, Sendable, Identifiable, Hashable {
-    public let id: String
-    public var name: String
-    public var role: String
-    public var agentType: String?
-    public var state: String      // idle | working | busy | thinking
-    public var task: String?
-}
-
-/// One line of the orchestrator activity feed.
-public struct OrchLogEntry: Codable, Sendable, Hashable, Identifiable {
-    public var t: Double          // ms epoch
-    public var kind: String       // start | assign | lead | done | spawn | note | warn | …
-    public var text: String
-    // Stable enough for SwiftUI ForEach within a single session.
-    public var id: String { "\(t)-\(kind)-\(text)" }
-}
-
-/// Full orchestration snapshot (the `orchestration` message).
-public struct Orchestration: Codable, Sendable {
-    public var enabled: Bool
-    public var running: Bool
-    public var resumable: Bool?
-    public var status: String     // idle | briefing | running | done | stopped | stalled | error
-    public var goal: String?
-    public var workerType: String?
-    public var workdir: String?
-    public var startWorkers: Int?
-    public var maxAgents: Int?
-    public var round: Int?
-    public var agents: Int?
-    public var fleet: [FleetAgent]
-    public var log: [OrchLogEntry]
-
-    public static let empty = Orchestration(
-        enabled: false, running: false, resumable: false, status: "idle",
-        goal: nil, workerType: nil, workdir: nil, startWorkers: nil, maxAgents: nil,
-        round: nil, agents: nil, fleet: [], log: []
-    )
-}
-
 // MARK: - Inbound (server → client)
 
 /// Every message the server can push over the socket.
@@ -93,7 +50,6 @@ public enum ServerMessage: Sendable {
     case routed(target: String, text: String, count: Int)
     case spawnError(message: String)
     case speaking(on: Bool, name: String?)
-    case orchestration(Orchestration)
     case unknown(type: String)
 }
 
@@ -128,8 +84,6 @@ extension ServerMessage: Decodable {
         case "speaking":
             self = .speaking(on: (try? c.decode(Bool.self, forKey: .on)) ?? false,
                              name: try c.decodeIfPresent(String.self, forKey: .name))
-        case "orchestration":
-            self = .orchestration(try Orchestration(from: decoder))
         default:
             self = .unknown(type: type)
         }
@@ -137,18 +91,6 @@ extension ServerMessage: Decodable {
 }
 
 // MARK: - Outbound (client → server)
-
-/// Config block for `set-orchestration` (mid-run edits are ignored by the server).
-public struct OrchConfig: Encodable, Sendable {
-    public var goal: String?
-    public var workerType: String?
-    public var startWorkers: Int?
-    public var maxAgents: Int?
-    public init(goal: String? = nil, workerType: String? = nil, startWorkers: Int? = nil, maxAgents: Int? = nil) {
-        self.goal = goal; self.workerType = workerType
-        self.startWorkers = startWorkers; self.maxAgents = maxAgents
-    }
-}
 
 /// Every message the client can send. `encode` produces the exact `{type:…}`
 /// shape `handle()` switches on in server.js.
@@ -162,11 +104,6 @@ public enum ClientMessage: Encodable, Sendable {
     case rename(id: String, name: String)
     case clientlog(msg: String)
     case list
-    case setOrchestration(enabled: Bool? = nil, config: OrchConfig? = nil)
-    case orchestrateStart(goal: String, workerType: String? = nil, workdir: String? = nil,
-                          startWorkers: Int? = nil, maxAgents: Int? = nil)
-    case orchestrateStop
-    case orchestrateResume
 
     // Dynamic string keys so we can build each message's exact field set.
     private struct Key: CodingKey {
@@ -202,17 +139,6 @@ public enum ClientMessage: Encodable, Sendable {
             try put("clientlog", "type"); try put(msg, "msg")
         case .list:
             try put("list", "type")
-        case let .setOrchestration(enabled, config):
-            try put("set-orchestration", "type")
-            try putIf(enabled, "enabled"); try putIf(config, "config")
-        case let .orchestrateStart(goal, workerType, workdir, startWorkers, maxAgents):
-            try put("orchestrate-start", "type"); try put(goal, "goal")
-            try putIf(workerType, "workerType"); try putIf(workdir, "workdir")
-            try putIf(startWorkers, "startWorkers"); try putIf(maxAgents, "maxAgents")
-        case .orchestrateStop:
-            try put("orchestrate-stop", "type")
-        case .orchestrateResume:
-            try put("orchestrate-resume", "type")
         }
     }
 }

@@ -26,11 +26,11 @@ let names = ["jack", "zulu", "nova"]
 let aliases = ["programmer": "programmer", "loop": "loop", "architect": "architect"]
 func p(_ s: String) -> VoiceCommand? { VoiceGrammar.parse(s, activeNames: names, promptAliases: aliases) }
 
-eq(p("new terminal"), .spawn(agentType: "claude", prompt: nil), "spawn plain")
+eq(p("new terminal"), .spawn(agentType: "shell", prompt: nil), "spawn plain → blank shell")
 eq(p("new codex terminal"), .spawn(agentType: "codex", prompt: nil), "spawn codex")
 eq(p("spawn a hermes agent"), .spawn(agentType: "hermes", prompt: nil), "spawn hermes verb/noun")
 eq(p("another claude"), .spawn(agentType: "claude", prompt: nil), "spawn 'another claude'")
-eq(p("new terminal, programmer"), .spawn(agentType: "claude", prompt: "programmer"), "spawn with role")
+eq(p("new claude terminal, programmer"), .spawn(agentType: "claude", prompt: "programmer"), "spawn with role")
 eq(p("new codex terminal architect"), .spawn(agentType: "codex", prompt: "architect"), "spawn codex+role")
 eq(p("hey jack build a login page"), .command(target: "jack", text: "build a login page"), "filler + command")
 eq(p("ok everyone run the tests"), .command(target: "all", text: "run the tests"), "filler + broadcast")
@@ -70,8 +70,8 @@ if case let .list(ts)? = decode(#"{"type":"list","terminals":[{"id":"1","name":"
     check(ts.first?.promptId == nil, "list[0].promptId is null→nil")
 } else { check(false, "decode list") }
 
-if case let .spawned(t)? = decode(#"{"type":"spawned","id":"2","name":"zulu","agentType":"codex","role":"lead","promptId":"loop","promptLabel":"Loop","cwd":"/tmp"}"#) {
-    eq(t.id, "2", "spawned.id"); eq(t.role ?? "", "lead", "spawned.role"); eq(t.promptLabel ?? "", "Loop", "spawned.promptLabel")
+if case let .spawned(t)? = decode(#"{"type":"spawned","id":"2","name":"zulu","agentType":"codex","promptId":"loop","promptLabel":"Loop","cwd":"/tmp"}"#) {
+    eq(t.id, "2", "spawned.id"); eq(t.agentType ?? "", "codex", "spawned.agentType"); eq(t.promptLabel ?? "", "Loop", "spawned.promptLabel")
 } else { check(false, "decode spawned") }
 
 if case let .output(id, data)? = decode(#"{"type":"output","id":"1","data":"hi\u001b[0m"}"#) {
@@ -94,12 +94,6 @@ if case let .spawnError(msg)? = decode(#"{"type":"spawn-error","message":"codex 
     eq(msg, "codex is not installed", "spawn-error.message")
 } else { check(false, "decode spawn-error") }
 
-if case let .orchestration(o)? = decode(#"{"type":"orchestration","enabled":true,"running":true,"resumable":false,"status":"running","goal":"build app","workerType":"claude","workdir":"/tmp","startWorkers":3,"maxAgents":8,"round":2,"agents":4,"fleet":[{"id":"1","name":"jack","role":"lead","agentType":"claude","state":"thinking","task":""}],"log":[{"t":123,"kind":"start","text":"goal set"}]}"#) {
-    check(o.running, "orch.running"); eq(o.status, "running", "orch.status")
-    eq(o.maxAgents, 8, "orch.maxAgents"); eq(o.fleet.first?.state ?? "", "thinking", "orch.fleet[0].state")
-    eq(o.log.first?.kind ?? "", "start", "orch.log[0].kind")
-} else { check(false, "decode orchestration") }
-
 if case let .unknown(t)? = decode(#"{"type":"future-thing","x":1}"#) {
     eq(t, "future-thing", "unknown type preserved")
 } else { check(false, "decode unknown") }
@@ -115,17 +109,9 @@ let ctl = dict(.control(action: "interrupt", target: "all"))
 eq(ctl["type"] as? String, "control", "control.type"); eq(ctl["action"] as? String, "interrupt", "control.action")
 let rz = dict(.resize(id: "1", cols: 80, rows: 24))
 eq(rz["cols"] as? Int, 80, "resize.cols"); eq(rz["rows"] as? Int, 24, "resize.rows")
-let os = dict(.orchestrateStart(goal: "g", workerType: "codex", workdir: "/w", startWorkers: 3, maxAgents: 8))
-eq(os["type"] as? String, "orchestrate-start", "orchStart.type"); eq(os["goal"] as? String, "g", "orchStart.goal")
-eq(os["startWorkers"] as? Int, 3, "orchStart.startWorkers")
-let setO = dict(.setOrchestration(enabled: true, config: nil))
-eq(setO["type"] as? String, "set-orchestration", "setOrch.type"); eq(setO["enabled"] as? Bool, true, "setOrch.enabled")
-check(setO["config"] == nil, "setOrch omits nil config")
-let cfg = dict(.setOrchestration(config: OrchConfig(goal: "g", workerType: "claude", startWorkers: 2, maxAgents: 6)))
-let nested = cfg["config"] as? [String: Any]
-eq(nested?["goal"] as? String, "g", "setOrch.config.goal"); eq(nested?["maxAgents"] as? Int, 6, "setOrch.config.maxAgents")
+let kl = dict(.kill(id: "9"))
+eq(kl["type"] as? String, "kill", "kill.type"); eq(kl["id"] as? String, "9", "kill.id")
 eq(dict(.list)["type"] as? String, "list", "list.type")
-eq(dict(.orchestrateStop)["type"] as? String, "orchestrate-stop", "orchStop.type")
 
 // ---- Voice segmenter --------------------------------------------------------
 section("voice segmenter")
@@ -175,13 +161,11 @@ actor LiveCollector {
     private(set) var hello: Hello?
     private(set) var sawConnected = false
     private(set) var sawList = false
-    private(set) var sawOrchestration = false
     func add(_ ev: CnosEvent) {
         switch ev {
         case .connected: sawConnected = true
         case .message(.hello(let h)): hello = h
         case .message(.list): sawList = true
-        case .message(.orchestration): sawOrchestration = true
         default: break
         }
     }
@@ -209,7 +193,6 @@ func runLive(_ urlStr: String) async {
     if let h = hello { check(!h.agentTypes.isEmpty, "live hello.agentTypes = \(h.agentTypes)") }
     check(await collector.sawConnected, "WebSocket delegate reported connected")
     check(await collector.sawList, "received initial terminal list")
-    check(await collector.sawOrchestration, "received initial orchestration snapshot")
 
     // A REST round-trip.
     do {

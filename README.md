@@ -1,11 +1,11 @@
 # cnos
 
-Your own command a fleet of AI coding agents with your voice.
+Command a fleet of terminals — blank shells and AI coding agents — with your voice.
 
-cnos launches a grid of real agent terminals — **claude, codex, hermes** —
-each with its own call sign (`jack`, `zulu`, `echo`, …) — and lets you drive them
-by voice or text, optionally preloaded with a specialist **role** prompt. Claude
-starts in **auto mode** with **max effort**:
+cnos launches a grid of real terminals — a **blank shell** by default, or a coding
+agent (**claude, codex, hermes**) — each with its own call sign (`jack`, `zulu`,
+`echo`, …), driven by voice or text. Agents can be preloaded with a specialist
+**role** prompt and start in **auto mode** with **max effort**:
 
 ```
 claude --permission-mode auto --effort max
@@ -75,8 +75,9 @@ Each agent card shows the directory it's running in.
 [hey] <agent|everyone> stop|cancel|pause         → stop the current task (Esc)
 [hey] <agent|everyone> clear|erase|scratch that  → wipe typed-but-unsent input
 [hey] <agent|everyone> enter|go|submit           → just press Enter
-new|add|spawn <claude|codex|hermes> [role]       → launch an agent (optionally in a role)
-new terminal, programmer                         → launch preloaded with the “programmer” role
+new terminal                                     → blank shell (the default)
+new <claude|codex|hermes> terminal [role]        → launch that agent (optionally in a role)
+new claude terminal, programmer                  → claude preloaded with the “programmer” role
 ```
 
 The first word is the target. `everyone`, `all`, `team`, `fleet` broadcast.
@@ -108,26 +109,9 @@ Bundled prompts (files live in `prompts/`):
 
 Add your own: drop a `.md` into `prompts/` and register it in `PROMPT_SPECS` (`server.js`).
 
-## Orchestrate (goal → fleet)
-
-Flip **Orchestrate** on, type a **goal**, and press **Start**. cnos spawns a
-**lead** agent plus a few **workers** and runs an autonomous
-*perceive → reason → act → observe* loop until the goal is met:
-
-- The **lead** (a Claude agent) breaks the goal into subtasks and delegates them,
-  appending `{"action":"assign",…}` directives to `.cnos/orders.jsonl` (the server
-  tails that file — exact bytes, not screen-scraping).
-- The server **dispatches** each task to an idle worker, detects when it's done by
-  reading the worker's rendered screen (a headless xterm — "esc to interrupt" in the
-  footer means busy), and **reports** the result back to the lead.
-- When every worker is busy and work remains, cnos **auto-spawns** another worker
-  (up to the **Max** cap). It stops when the lead declares the goal complete.
-
-You set the **goal**, worker **type**, **Workers** to start with (default 3), and the
-**Max** agent cap (default 8). A live panel shows each agent's state and an activity
-feed of the lead's decisions. **Stop** halts the loop but leaves the agents running;
-**Resume** picks the loop back up and catches up on anything they finished while
-paused. The lead is always `claude`; override its model/flags with `CNOS_LEAD_ARGS`.
+For multi-agent work, launch agents with the **Orchestrator** loop prompt (it
+delegates to its own subagents) — or just spawn several agents and direct them by
+voice/text.
 
 ## Configuration
 
@@ -136,8 +120,8 @@ paused. The lead is always `claude`; override its model/flags with `CNOS_LEAD_AR
 | `PORT`                | `4173`                                    | HTTP/WebSocket port                  |
 | `CNOS_WORKDIR`        | your home dir                             | default working dir for agents       |
 | `CNOS_<TYPE>_BIN`     | the CLI name (`claude`, `codex`, …)       | path to that agent's CLI             |
-| `CNOS_<TYPE>_ARGS`    | per-type auto-mode flags (see table)      | flags that agent type launches with  |
-| `CNOS_LEAD_ARGS`      | (none)                                    | extra flags for the orchestrator lead (e.g. `--model sonnet`) |
+| `CNOS_<TYPE>_ARGS`    | per-type flags (see table; `shell` = none)| flags that terminal type launches with |
+| `CNOS_SHELL_BIN`      | `$SHELL` (e.g. `/bin/zsh`)                | shell used for blank terminals       |
 | `DEEPSEEK_API_KEY`    | `~/.hermes/.env` fallback                 | DeepSeek balance API credential      |
 | `CNOS_WHISPER_BIN`    | auto (`whisper-cli`)                      | path to the whisper.cpp binary       |
 | `CNOS_WHISPER_MODEL`  | `models/ggml-base.en.bin`                 | Whisper model file                   |

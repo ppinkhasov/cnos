@@ -61,6 +61,8 @@
       <button id="micBtn" class="btn mic" title="Toggle voice control">
         <span class="dot"></span><span class="label">Listen</span>
       </button>
+      <button id="themeBtn" class="btn icon" type="button" title="Theme — color scheme, font &amp; text size">🎨</button>
+      <button id="fsBtn" class="btn icon fs-btn" type="button" title="Fullscreen (F11)">⛶</button>
       <button id="diagToggle" class="btn icon" title="Voice diagnostics (mic level + log)">🔎</button>
     </div>
   </header>
@@ -116,8 +118,23 @@
     </div>
   </div>
 
+  <!-- Theme picker popover (anchored under the 🎨 button) -->
+  <div id="themePop" class="theme-pop" hidden>
+    <div class="theme-pop-head">🎨 Theme</div>
+    <div id="themeGrid" class="theme-grid"></div>
+    <div class="theme-pop-foot">
+      <label class="theme-field">Font
+        <select id="fontSel"><option value="">Theme default</option></select>
+      </label>
+      <label class="theme-field">Text size
+        <select id="sizeSel"></select>
+      </label>
+    </div>
+  </div>
+
   <script src="/vendor/xterm/xterm.js"></script>
   <script src="/vendor/addon-fit/addon-fit.js"></script>
+  <script src="/themes.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -68,6 +68,23 @@ applies to every new agent (manual **+ Add** and voice *"new terminal"*). The
 choice is remembered across reloads; the default is `CNOS_WORKDIR` (your home dir).
 Each agent card shows the directory it's running in.
 
+## Themes & display
+
+Click **🎨** in the top bar to restyle everything — applied instantly and remembered
+across reloads:
+
+- **16 color schemes** — cnos Dark/Light, Solarized (dark & light), Dracula, Nord,
+  Tokyo Night, Catppuccin Mocha, Gruvbox, One Dark, Monokai Pro, GitHub Dark,
+  **Ubuntu**, High Contrast, **Matrix**, and **Synthwave '84**. Each recolors the
+  whole UI *and* the terminal palette (all 16 ANSI colors).
+- **Font** — choose a monospace family (JetBrains Mono, Fira Code, IBM Plex Mono,
+  Ubuntu Mono, Hack, Cascadia, …) or leave it on the theme's recommended font.
+- **Text size** — scale the terminal text from Extra Small to Extra Large.
+
+Click **⛶** (or press F11) to toggle **fullscreen**. Themes are data in
+`public/themes.js` (`CNOS_THEMES` — add your own there); the engine lives in
+`public/app.js`.
+
 ## Voice grammar
 
 ```

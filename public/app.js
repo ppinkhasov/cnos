@@ -7,7 +7,9 @@ const HeardEl   = document.getElementById('heard');
 const CardTpl   = document.getElementById('card-tpl');
 const PromptSel = document.getElementById('promptSel'); // role-prompt picker for new agents
 
-const TERM_THEME = {
+// Active terminal palette + font, driven by the theme engine (see "Theme" below).
+// Seeded with the default so terminals created before applyTheme() still render.
+let currentTermTheme = {
   background: '#141821', foreground: '#e6e9ef', cursor: '#7c9cff',
   selectionBackground: '#33405e',
   black: '#1b212d', red: '#ff6b6b', green: '#58d6a6', yellow: '#e6c07b',
@@ -16,6 +18,8 @@ const TERM_THEME = {
   brightYellow: '#f1d49b', brightBlue: '#9db4ff', brightMagenta: '#d7a9f5',
   brightCyan: '#7fd3dd', brightWhite: '#ffffff',
 };
+let currentFontStack = '"SFMono-Regular", "SF Mono", ui-monospace, Menlo, monospace';
+let currentFontSize = 12;
 
 /** id -> { id, name, cwd, exited, term, fit, ro, el } */
 const agents = new Map();
@@ -205,9 +209,9 @@ function ensureCard({ id, name, agentType, promptLabel, cwd }) {
   const termEl = el.querySelector('.term');
 
   const term = new Terminal({
-    fontFamily: 'SFMono-Regular, Menlo, Consolas, monospace',
-    fontSize: 12, cursorBlink: true, scrollback: 8000,
-    theme: TERM_THEME, allowProposedApi: true,
+    fontFamily: currentFontStack,
+    fontSize: currentFontSize, cursorBlink: true, scrollback: 8000,
+    theme: currentTermTheme, allowProposedApi: true,
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
@@ -802,5 +806,144 @@ UsageEl.addEventListener('click', () => {
 });
 refreshUsage();
 setInterval(() => refreshUsage(), 60_000);
+
+// ---- Theme engine (color scheme + font + text size) + fullscreen ------------
+// Themes/fonts/sizes are defined in themes.js (loaded first). Applying a theme
+// sets the CSS custom properties on :root, swaps the xterm palette/font/size on
+// every open terminal, and persists the choice in localStorage. Fully local.
+const _THEMES_SRC = (typeof CNOS_THEMES !== 'undefined') ? CNOS_THEMES : [];
+const _FONTS_SRC  = (typeof CNOS_FONTS  !== 'undefined') ? CNOS_FONTS  : [];
+const _SIZES_SRC  = (typeof CNOS_SIZES  !== 'undefined') ? CNOS_SIZES  : [{ id: 'normal', label: 'Normal', scale: 1 }];
+const THEMES = Object.fromEntries(_THEMES_SRC.map((t) => [t.id, t]));
+const FONTS  = Object.fromEntries(_FONTS_SRC.map((f) => [f.id, f]));
+const DEFAULT_THEME = THEMES['cnos-dark'] ? 'cnos-dark' : (_THEMES_SRC[0] ? _THEMES_SRC[0].id : 'cnos-dark');
+const UI_VARS = { bg: '--bg', panel: '--panel', panel2: '--panel-2', line: '--line', text: '--text', muted: '--muted', accent: '--accent', accent2: '--accent-2', danger: '--danger', live: '--live' };
+
+let themeId = localStorage.getItem('cnos.theme') || DEFAULT_THEME;
+let fontId  = localStorage.getItem('cnos.font')  || '';        // '' → follow the theme's recommended font
+let sizeId  = localStorage.getItem('cnos.size')  || 'normal';
+if (!THEMES[themeId]) themeId = DEFAULT_THEME;
+
+const activeTheme = () => THEMES[themeId] || THEMES[DEFAULT_THEME] || _THEMES_SRC[0];
+function activeFontStack() {
+  const t = activeTheme();
+  const fid = fontId || (t && t.font);
+  return (FONTS[fid] || FONTS.sf || { stack: '"SFMono-Regular", ui-monospace, Menlo, monospace' }).stack;
+}
+const activeScale = () => (_SIZES_SRC.find((s) => s.id === sizeId) || { scale: 1 }).scale;
+
+function xtermThemeFrom(t) {
+  const x = t.term;
+  return {
+    background: x.background, foreground: x.foreground, cursor: x.cursor, cursorAccent: x.background,
+    selectionBackground: x.selection,
+    black: x.black, red: x.red, green: x.green, yellow: x.yellow,
+    blue: x.blue, magenta: x.magenta, cyan: x.cyan, white: x.white,
+    brightBlack: x.brightBlack, brightRed: x.brightRed, brightGreen: x.brightGreen, brightYellow: x.brightYellow,
+    brightBlue: x.brightBlue, brightMagenta: x.brightMagenta, brightCyan: x.brightCyan, brightWhite: x.brightWhite,
+  };
+}
+
+function applyTheme() {
+  const t = activeTheme();
+  if (!t) return;
+  const root = document.documentElement;
+  for (const k in UI_VARS) root.style.setProperty(UI_VARS[k], t.ui[k]);
+  root.style.setProperty('--on-accent', t.dark ? '#0b0f17' : '#ffffff');
+  root.style.colorScheme = t.dark ? 'dark' : 'light';
+  const meta = document.querySelector('meta[name="theme-color"]'); if (meta) meta.content = t.ui.panel;
+
+  currentFontStack = activeFontStack();
+  currentFontSize = Math.max(8, Math.round(12 * activeScale()));
+  currentTermTheme = xtermThemeFrom(t);
+  root.style.setProperty('--font-mono', currentFontStack);
+
+  // Live-apply to every open terminal, then refit (font metrics changed).
+  for (const a of agents.values()) {
+    try {
+      a.term.options.theme = currentTermTheme;
+      a.term.options.fontFamily = currentFontStack;
+      a.term.options.fontSize = currentFontSize;
+      a.fit.fit();
+      send({ type: 'resize', id: a.id, cols: a.term.cols, rows: a.term.rows });
+    } catch {}
+  }
+  renderThemePicker();
+}
+
+function setTheme(id) { if (THEMES[id]) { themeId = id; localStorage.setItem('cnos.theme', id); applyTheme(); } }
+function setFont(id)  { fontId = id; if (id) localStorage.setItem('cnos.font', id); else localStorage.removeItem('cnos.font'); applyTheme(); }
+function setSize(id)  { sizeId = id; localStorage.setItem('cnos.size', id); applyTheme(); }
+
+const ThemeBtn  = document.getElementById('themeBtn');
+const ThemePop  = document.getElementById('themePop');
+const ThemeGrid = document.getElementById('themeGrid');
+const FontSel   = document.getElementById('fontSel');
+const SizeSel   = document.getElementById('sizeSel');
+
+function renderThemePicker() {
+  if (ThemeGrid) {
+    ThemeGrid.innerHTML = '';
+    for (const t of _THEMES_SRC) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'theme-swatch' + (t.id === themeId ? ' active' : '');
+      b.title = t.name + (t.dark ? '' : ' (light)');
+      b.onclick = () => setTheme(t.id);
+      b.innerHTML =
+        `<span class="sw-strip" style="background:${t.ui.bg}">`
+        + `<i style="background:${t.ui.accent}"></i>`
+        + `<i style="background:${t.ui.accent2}"></i>`
+        + `<i style="background:${t.ui.danger}"></i>`
+        + `<i style="background:${t.ui.text}"></i>`
+        + `<i style="background:${t.ui.panel}"></i></span>`
+        + `<span class="sw-name">${escapeHtml(t.name)}</span>`;
+      ThemeGrid.appendChild(b);
+    }
+  }
+  if (FontSel && FontSel.options.length <= 1) for (const f of _FONTS_SRC) FontSel.add(new Option(f.label, f.id));
+  if (FontSel) FontSel.value = fontId;
+  if (SizeSel && !SizeSel.options.length) for (const s of _SIZES_SRC) SizeSel.add(new Option(s.label, s.id));
+  if (SizeSel) SizeSel.value = sizeId;
+}
+
+FontSel?.addEventListener('change', (e) => setFont(e.target.value));
+SizeSel?.addEventListener('change', (e) => setSize(e.target.value));
+
+function openTheme() {
+  const r = ThemeBtn.getBoundingClientRect();
+  ThemePop.style.top = (r.bottom + 6) + 'px';
+  ThemePop.style.left = Math.max(8, Math.min(r.left - 130, window.innerWidth - 328)) + 'px';
+  ThemePop.hidden = false;
+  renderThemePicker();
+}
+function closeTheme() { ThemePop.hidden = true; }
+if (ThemeBtn && ThemePop) {
+  ThemeBtn.onclick = (e) => { e.stopPropagation(); if (ThemePop.hidden) openTheme(); else closeTheme(); };
+  document.addEventListener('click', (e) => { if (!ThemePop.hidden && !ThemePop.contains(e.target) && !ThemeBtn.contains(e.target)) closeTheme(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !ThemePop.hidden) closeTheme(); });
+}
+
+// Fullscreen toggle (Fullscreen API + WebKit fallback for older Safari).
+const FsBtn = document.getElementById('fsBtn');
+const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement;
+function toggleFs() {
+  if (fsEl()) { (document.exitFullscreen || document.webkitExitFullscreen)?.call(document); }
+  else {
+    const el = document.documentElement;
+    const req = el.requestFullscreen || el.webkitRequestFullscreen;
+    const p = req && req.call(el);
+    if (p && p.catch) p.catch(() => {});
+  }
+}
+function paintFs() { if (FsBtn) { const on = !!fsEl(); FsBtn.classList.toggle('on', on); FsBtn.title = on ? 'Exit fullscreen' : 'Fullscreen (F11)'; } }
+if (FsBtn) {
+  FsBtn.onclick = toggleFs;
+  document.addEventListener('fullscreenchange', paintFs);
+  document.addEventListener('webkitfullscreenchange', paintFs);
+  paintFs();
+}
+
+applyTheme();   // apply the saved/default theme on load (CSS vars + terminal palette/font/size)
 
 connect();

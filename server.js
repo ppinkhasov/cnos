@@ -322,7 +322,12 @@ function handle(ws, msg) {
 // ---- HTTP + static assets ---------------------------------------------------
 const app = express();
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// no-cache (revalidate every load) so front-end edits always reach the browser
+// without a hard refresh — cheap 304s when files are unchanged, thanks to etag.
+app.use(express.static(path.join(__dirname, 'public'), {
+  etag: true, lastModified: true,
+  setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache'),
+}));
 // Serve the xterm.js library straight out of node_modules (no bundler needed).
 app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xterm/xterm/lib')));
 app.use('/vendor/xterm-css', express.static(path.join(__dirname, 'node_modules/@xterm/xterm/css')));

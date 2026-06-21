@@ -858,17 +858,30 @@ function applyTheme() {
   currentTermTheme = xtermThemeFrom(t);
   root.style.setProperty('--font-mono', currentFontStack);
 
-  // Live-apply to every open terminal, then refit (font metrics changed).
+  // Live-apply to every open terminal, then force a repaint — xterm v5 doesn't
+  // always re-render on a font-family swap that doesn't change cell metrics.
   for (const a of agents.values()) {
     try {
       a.term.options.theme = currentTermTheme;
       a.term.options.fontFamily = currentFontStack;
       a.term.options.fontSize = currentFontSize;
+      a.term.clearTextureAtlas?.();           // canvas/webgl glyph cache (no-op on DOM renderer)
       a.fit.fit();
+      a.term.refresh(0, a.term.rows - 1);      // redraw all visible rows with the new glyphs
       send({ type: 'resize', id: a.id, cols: a.term.cols, rows: a.term.rows });
     } catch {}
   }
   renderThemePicker();
+}
+
+// A bundled web font may arrive a frame after it's selected (font-display: swap);
+// when any font finishes loading, repaint terminals so the swap shows immediately.
+if (document.fonts && document.fonts.addEventListener) {
+  document.fonts.addEventListener('loadingdone', () => {
+    for (const a of agents.values()) {
+      try { a.term.clearTextureAtlas?.(); a.term.refresh(0, a.term.rows - 1); } catch {}
+    }
+  });
 }
 
 function setTheme(id) { if (THEMES[id]) { themeId = id; localStorage.setItem('cnos.theme', id); applyTheme(); } }

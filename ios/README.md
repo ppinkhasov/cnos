@@ -2,8 +2,8 @@
 
 A SwiftUI app that connects to a running [cnos](../README.md) server over its
 WebSocket protocol: live agent terminals (SwiftTerm), hands-free voice control,
-the orchestrator panel, the working-directory picker, role/loop **Loop Prompt**
-launches, and the usage strip — the cnos web UI, native on iOS/iPadOS.
+the working-directory picker, role/loop **Loop Prompt** launches, and the usage
+strip — the cnos web UI, native on iOS/iPadOS.
 
 ## Layout
 
@@ -12,8 +12,8 @@ launches, and the usage strip — the cnos web UI, native on iOS/iPadOS.
   the server's messages), and the voice layer (`VoiceGrammar` + `VoiceSegmenter`
   VAD). It has no Apple-UI dependencies so it builds and is verified headlessly.
 - **`App/`** — the SwiftUI app: `FleetStore` (the live mirror of one server),
-  `ContentView` + `Views/` (fleet grid, command bar, orchestrator, workdir picker,
-  usage), `Terminal/AgentTerminalView` (SwiftTerm bridge), `Voice/` (mic capture →
+  `ContentView` + `Views/` (fleet grid, command bar, workdir picker, usage),
+  `Terminal/AgentTerminalView` (SwiftTerm bridge), `Voice/` (mic capture →
   WAV → `/transcribe`). Depends on `CnosKit` + SwiftTerm.
 - **`project.yml`** — XcodeGen spec; the source of truth. The `.xcodeproj` is
   generated from it (and git-ignored).

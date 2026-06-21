@@ -15,7 +15,7 @@ Voice runs through **local Whisper** (whisper.cpp) — hands-free, private, offl
 No cloud speech API, no keys; audio never leaves your machine.
 
 A native **iOS/iPadOS client** (SwiftUI + SwiftTerm) lives in [`ios/`](ios/README.md) —
-the same fleet, terminals, voice, and orchestrator, connecting to your cnos server.
+the same fleet, terminals, and voice, connecting to your cnos server.
 
 ## Quick start
 
@@ -32,8 +32,9 @@ npm start
 
 Then open **http://localhost:4173 in Chrome**.
 
-1. Pick a type in the top bar and click **+ Add** — or say *“new claude terminal”*
-   or *“new hermes terminal”*… Each agent gets a call sign.
+1. Click **+ Add** for a **blank shell** (the default), or pick an agent type first —
+   or say *“new terminal”* (shell), *“new claude terminal”*, *“new codex terminal”*…
+   Each terminal gets a call sign.
 2. Voice **auto-starts** — allow the mic once. Pick your input from the **🎤 selector**
    in the top bar (toggle the **🔎** panel for a live level meter + log). Then talk:
    - *“jack, build a todo app in react”* → routed to **jack**
@@ -53,12 +54,16 @@ still works when you open cnos on the host machine itself.
 
 | Type     | Launches                              | Auto mode                |
 | -------- | ------------------------------------- | ------------------------ |
+| `shell` *(default)* | your `$SHELL` (e.g. `/bin/zsh`) — a plain blank terminal, no agent | — |
 | `claude` | `claude --permission-mode auto --effort max` | auto-accept edits |
 | `codex`  | `codex --sandbox workspace-write --ask-for-approval on-request` | auto (workspace-write) |
 | `hermes` | `hermes`                              | —                        |
 
-Only the CLIs you have installed will launch; others report a clear "not installed"
-message. Override any type with `CNOS_<TYPE>_BIN` and `CNOS_<TYPE>_ARGS`.
+**`shell` is the default** — *“new terminal”* / **+ Add** opens a blank shell; name a
+type (*“new claude terminal”*, or the top-bar selector) to launch a coding agent. Role
+prompts apply to agents only, not blank shells. Only the CLIs you have installed will
+launch; others report a clear "not installed" message. Override any type with
+`CNOS_<TYPE>_BIN` and `CNOS_<TYPE>_ARGS` (`CNOS_SHELL_BIN` for the shell).
 
 ## Working directory
 
@@ -78,12 +83,15 @@ across reloads:
   **Ubuntu**, High Contrast, **Matrix**, and **Synthwave '84**. Each recolors the
   whole UI *and* the terminal palette (all 16 ANSI colors).
 - **Font** — choose a monospace family (JetBrains Mono, Fira Code, IBM Plex Mono,
-  Ubuntu Mono, Hack, Cascadia, …) or leave it on the theme's recommended font.
+  Ubuntu Mono, Hack, Cascadia Code, Source Code Pro, Geist Mono, …) or leave it on
+  the theme's recommended font. These fonts are **bundled** (`public/fonts/` +
+  `public/fonts.css`), so they work offline regardless of what's installed.
 - **Text size** — scale the terminal text from Extra Small to Extra Large.
 
 Click **⛶** (or press F11) to toggle **fullscreen**. Themes are data in
 `public/themes.js` (`CNOS_THEMES` — add your own there); the engine lives in
-`public/app.js`.
+`public/app.js`. Terminal title bars are compact and the UI uses restrained
+font-weights for a clean, low-chrome look.
 
 ## Voice grammar
 
@@ -174,14 +182,16 @@ Browser  ── xterm.js grid ──────────────── W
                                               ffmpeg + whisper.cpp   node-pty
                                                   (transcribe)         │
                                                                        ▼
-                                                claude / codex / hermes  (×N)
+                                          shell / claude / codex / hermes  (×N)
 ```
 
 The Node server owns the PTYs and transcription; the browser captures audio and
 renders terminals. Spoken commands are recorded locally, transcribed by Whisper,
 parsed (`<agent> <command>`), and typed into that agent's terminal. Claude's
 first-run "trust this folder" prompt is auto-accepted. Multiple browser windows
-stay in sync (output is broadcast; scrollback is replayed on connect).
+stay in sync (output is broadcast; scrollback is replayed on connect). Front-end
+assets in `public/` (incl. `themes.js`, `fonts.css`, and the bundled fonts) are
+served with `Cache-Control: no-cache`, so edits reach the browser on a normal reload.
 
 ## ⚠️ Security
 

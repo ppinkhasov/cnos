@@ -1,0 +1,45 @@
+/* cnos bundled monospace fonts — offline @font-face for the non-system fonts in
+   themes.js (CNOS_FONTS). Family names MUST match the quoted names in those stacks.
+   Files live in public/fonts/ (served at /fonts). SF Mono & Menlo are system
+   fonts and are intentionally not bundled. */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/jetbrains-mono.woff2') format('woff2');
+}
+@font-face {
+  font-family: "Fira Code";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/fira-code.woff2') format('woff2');
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/ibm-plex-mono.woff2') format('woff2');
+}
+@font-face {
+  font-family: "Ubuntu Mono";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/ubuntu-mono.woff2') format('woff2');
+}
+@font-face {
+  font-family: "Hack";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/hack.woff2') format('woff2');
+}
+@font-face {
+  font-family: "Cascadia Code";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/cascadia-code.woff2') format('woff2');
+}
+@font-face {
+  font-family: "Source Code Pro";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/source-code-pro.woff2') format('woff2');
+}
+@font-face {
+  font-family: "Geist Mono";
+  font-style: normal; font-weight: 400; font-display: swap;
+  src: url('/fonts/geist-mono.woff2') format('woff2');
+}

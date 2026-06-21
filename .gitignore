@@ -8,10 +8,6 @@ models/
 # local Claude Code settings (machine-specific)
 .claude/settings.local.json
 
-# orchestrator directive channel — written at runtime into the agents' working dir
-# (only appears in the repo if CNOS_WORKDIR points here)
-.cnos/
-
 # logs / OS / editor cruft
 *.log
 npm-debug.log*

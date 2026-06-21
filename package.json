@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "description": "Voice-orchestrated fleet of Claude CLI agents — your own cnvs.dev",
+  "bin": {
+    "cnos": "cli/cnos.js"
+  },
   "scripts": {
     "postinstall": "node scripts/postinstall.mjs",
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node --watch server.js",
+    "cli": "node cli/cnos.js"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

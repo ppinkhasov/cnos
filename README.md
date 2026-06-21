@@ -107,7 +107,9 @@ new claude terminal, programmer                  → claude preloaded with the �
 
 The first word is the target. `everyone`, `all`, `team`, `fleet` broadcast.
 Voice is hands-free: it auto-detects when you start and stop talking (VAD),
-records the clip, and transcribes it with Whisper.
+records the clip, and transcribes it with Whisper. Common **mishearings** of the
+agent names are tolerated — *cloud*/*clawed* → claude, *codec*/*code&nbsp;x* → codex,
+*hermies* → hermes.
 
 ## Loop prompts
 
@@ -137,6 +139,42 @@ Add your own: drop a `.md` into `prompts/` and register it in `PROMPT_SPECS` (`s
 For multi-agent work, launch agents with the **Orchestrator** loop prompt (it
 delegates to its own subagents) — or just spawn several agents and direct them by
 voice/text.
+
+## Terminal CLI (`cnos`)
+
+Prefer to stay in the terminal? cnos ships a CLI that drives the **same fleet** over
+the same WebSocket — spawn in the terminal and it shows up in the browser too.
+
+```bash
+npm link        # once, to put `cnos` on your PATH (or: npm install -g .)
+cnos            # attach: a full-screen TUI right in your terminal
+```
+
+`cnos` with no args **attaches** — one terminal full-screen with full TUI fidelity
+(claude's own UI renders perfectly). The prefix key is **Ctrl-A** (tmux-style):
+
+| Keys | Action |
+| ---- | ------ |
+| `Ctrl-A` `s` / `c` / `x` / `h` | new shell / claude / codex / hermes |
+| `Ctrl-A` `1`–`9` | switch to terminal N · `n` / `p` next / previous |
+| `Ctrl-A` `:` | type a command into the current terminal |
+| `Ctrl-A` `!` | broadcast a command to all terminals |
+| `Ctrl-A` `k` / `w` / `d` / `?` | kill · set workdir · detach · help |
+| `Ctrl-A` `Ctrl-A` | send a literal Ctrl-A to the terminal |
+
+One-shot subcommands (scriptable):
+
+```bash
+cnos new claude --prompt loop --cwd ~/dev/app   # spawn (prints the call sign)
+cnos ls                                          # list terminals
+cnos send jack "build a login page"              # type a command into jack ("all" broadcasts)
+cnos stop jack            # interrupt   ·   cnos kill jack   ·   cnos usage
+cnos serve               # run the server in the foreground
+```
+
+It auto-starts the server if one isn't running (or target a remote one with
+`--server ws://host:port` / `--port N`). Voice, the theme picker, and fullscreen are
+browser features; in the terminal you get your terminal's own font and colors.
 
 ## Configuration
 

@@ -343,10 +343,21 @@ const CONTROL = {
   enter:     ['enter', 'submit', 'send', 'sendit', 'go', 'run', 'runit', 'doit', 'confirm', 'yes', 'proceed'],
   clear:     ['clear', 'clearit', 'clearthat', 'clearinput', 'cleartext', 'cleartheinput', 'clearthetext', 'clearthecommand', 'erase', 'erasethat', 'erasethis', 'wipe', 'wipethat', 'wipeit', 'scratchthat', 'discard', 'discardthat', 'deletethat'],
 };
-// "new terminal" / "add an agent" / "spawn a cli" → launch a new agent (no target needed)
-const SPAWN_VERB = /^(new|add|create|spawn|launch|open|start|another)\b/;
-const SPAWN_NOUN = /\b(terminal|terminals|agent|agents|cli|claude|codex|hermes|window|windows|bot|instance|session)\b/;
-const AGENT_TYPE_RE = /\b(claude|codex|hermes)\b/;
+// "new terminal" / "add an agent" / "spawn a cli" → launch a new terminal (no target needed).
+// Agent-type aliases include common Whisper mishearings so a misrecognized name still
+// launches the right agent: "cloud"/"clawed"→claude, "codec"/"code x"→codex, "hermies"→hermes.
+const AGENT_TYPE_ALIASES = {
+  claude: ['claude', 'claud', 'cloud', 'clawed', 'clawd', 'claudes', 'clode', 'klaud', 'chlaude', 'cloud9'],
+  codex:  ['codex', 'codec', 'codecs', 'codeex', 'kodex', 'codux', 'codecks', 'codaks', 'codx'],
+  hermes: ['hermes', 'hermies', 'hermez', 'herms', 'harmes', 'hermie', 'hermies'],
+};
+const AGENT_ALIAS_TO_TYPE = {};
+for (const [t, ws] of Object.entries(AGENT_TYPE_ALIASES)) for (const w of ws) AGENT_ALIAS_TO_TYPE[w] = t;
+const SPAWN_VERBS = new Set(['new', 'add', 'create', 'spawn', 'launch', 'open', 'start', 'another', 'make']);
+const SPAWN_NOUNS = new Set(['terminal', 'terminals', 'agent', 'agents', 'cli', 'window', 'windows',
+  'bot', 'instance', 'session', 'tab', 'console', 'shell', 'shells', 'bash', 'zsh',
+  ...Object.keys(AGENT_ALIAS_TO_TYPE)]);
+const CODEX_SPACED_RE = /code\s?-?x/;   // "code x" / "code-x" said as two tokens → codex
 const clean = (s) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
 // The TTS hook (tts-notify.py) prefixes every spoken line with "<Callsign> says, ".
 // This matches that lead-in so we can discard the fleet's own voice if the mic
@@ -366,13 +377,18 @@ function parseVoice(transcript) {
   if (!tokens.length) return null;
 
   const phrase = tokens.join(' ').toLowerCase();
-  if (SPAWN_VERB.test(phrase) && SPAWN_NOUN.test(phrase)) {
-    const m = phrase.match(AGENT_TYPE_RE);
+  const ct = tokens.map(clean);
+  // Spawn intent = starts with a spawn verb AND mentions a terminal/agent noun (or a
+  // misheard agent name). Then resolve the agent type from any recognized alias, else shell.
+  const hasSpawnNoun = ct.some((t) => SPAWN_NOUNS.has(t)) || CODEX_SPACED_RE.test(phrase);
+  if (SPAWN_VERBS.has(ct[0]) && hasSpawnNoun) {
+    let agentType = 'shell';   // "new terminal" → a blank shell; a type must be named
+    for (const t of ct) { if (AGENT_ALIAS_TO_TYPE[t]) { agentType = AGENT_ALIAS_TO_TYPE[t]; break; } }
+    if (agentType === 'shell' && CODEX_SPACED_RE.test(phrase)) agentType = 'codex';
     // a role name anywhere in the phrase preloads that prompt, e.g. "new claude terminal, programmer"
     let prompt;
     for (const tok of tokens) { const id = promptAliases[clean(tok)]; if (id) { prompt = id; break; } }
-    // "new terminal" → a blank shell; an agent type must be named explicitly.
-    return { global: 'spawn', agentType: m ? m[1] : 'shell', prompt };
+    return { global: 'spawn', agentType, prompt };
   }
 
   const head = clean(tokens[0]);

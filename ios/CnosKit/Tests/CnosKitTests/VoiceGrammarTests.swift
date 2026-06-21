@@ -10,7 +10,7 @@ final class VoiceGrammarTests: XCTestCase {
     }
 
     func testSpawnPlain() {
-        XCTAssertEqual(parse("new terminal"), .spawn(agentType: "claude", prompt: nil))
+        XCTAssertEqual(parse("new terminal"), .spawn(agentType: "shell", prompt: nil))   // default = blank shell
         XCTAssertEqual(parse("new claude terminal"), .spawn(agentType: "claude", prompt: nil))
         XCTAssertEqual(parse("new codex terminal"), .spawn(agentType: "codex", prompt: nil))
         XCTAssertEqual(parse("spawn a hermes agent"), .spawn(agentType: "hermes", prompt: nil))
@@ -18,8 +18,17 @@ final class VoiceGrammarTests: XCTestCase {
     }
 
     func testSpawnWithRole() {
-        XCTAssertEqual(parse("new terminal, programmer"), .spawn(agentType: "claude", prompt: "programmer"))
+        XCTAssertEqual(parse("new claude terminal, programmer"), .spawn(agentType: "claude", prompt: "programmer"))
         XCTAssertEqual(parse("new codex terminal architect"), .spawn(agentType: "codex", prompt: "architect"))
+    }
+
+    // Common Whisper mishearings of the agent names still resolve to the right type.
+    func testSpawnMishearings() {
+        XCTAssertEqual(parse("new clawed terminal"), .spawn(agentType: "claude", prompt: nil))
+        XCTAssertEqual(parse("new cloud terminal"), .spawn(agentType: "claude", prompt: nil))
+        XCTAssertEqual(parse("spawn a codec agent"), .spawn(agentType: "codex", prompt: nil))
+        XCTAssertEqual(parse("new code x terminal"), .spawn(agentType: "codex", prompt: nil))
+        XCTAssertEqual(parse("new hermies terminal"), .spawn(agentType: "hermes", prompt: nil))
     }
 
     func testFillerStripped() {

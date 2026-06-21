@@ -33,9 +33,23 @@ public enum VoiceGrammar {
                  "clearthecommand", "erase", "erasethat", "erasethis", "wipe", "wipethat", "wipeit",
                  "scratchthat", "discard", "discardthat", "deletethat"],
     ]
-    static let spawnVerb = #"^(new|add|create|spawn|launch|open|start|another)\b"#
-    static let spawnNoun = #"\b(terminal|terminals|agent|agents|cli|claude|codex|hermes|window|windows|bot|instance|session)\b"#
-    static let agentTypeRE = #"\b(claude|codex|hermes)\b"#
+    // Agent-type aliases incl. common Whisper mishearings so a misrecognized name still
+    // launches the right agent ("cloud"/"clawed"→claude, "codec"/"code x"→codex, "hermies"→hermes).
+    static let agentTypeAliases: [(type: String, words: [String])] = [
+        ("claude", ["claude", "claud", "cloud", "clawed", "clawd", "claudes", "clode", "klaud", "chlaude", "cloud9"]),
+        ("codex",  ["codex", "codec", "codecs", "codeex", "kodex", "codux", "codecks", "codaks", "codx"]),
+        ("hermes", ["hermes", "hermies", "hermez", "herms", "harmes", "hermie"]),
+    ]
+    static let aliasToType: [String: String] = {
+        var m = [String: String](); for (t, ws) in agentTypeAliases { for w in ws { m[w] = t } }; return m
+    }()
+    static let spawnVerbs: Set<String> = ["new", "add", "create", "spawn", "launch", "open", "start", "another", "make"]
+    static let spawnNouns: Set<String> = {
+        var s: Set<String> = ["terminal", "terminals", "agent", "agents", "cli", "window", "windows",
+                              "bot", "instance", "session", "tab", "console", "shell", "shells", "bash", "zsh"]
+        s.formUnion(aliasToType.keys); return s
+    }()
+    static let codexSpacedRE = #"code\s?-?x"#   // "code x" / "code-x" said as two tokens → codex
     static let ttsEchoRE = #"^\s*[a-z][a-z0-9-]*\s*,?\s+says\b"#
 
     /// Lowercase and strip everything but [a-z0-9] — the same `clean()` as app.js.
@@ -48,11 +62,6 @@ public enum VoiceGrammar {
         var opts: String.CompareOptions = [.regularExpression]
         if caseInsensitive { opts.insert(.caseInsensitive) }
         return text.range(of: pattern, options: opts) != nil
-    }
-
-    private static func firstMatch(_ pattern: String, _ text: String) -> String? {
-        guard let r = text.range(of: pattern, options: .regularExpression) else { return nil }
-        return String(text[r])
     }
 
     /// Interpret a transcript.
@@ -71,9 +80,15 @@ public enum VoiceGrammar {
         if tokens.isEmpty { return nil }
 
         let phrase = tokens.joined(separator: " ").lowercased()
-        if matches(spawnVerb, phrase) && matches(spawnNoun, phrase) {
-            // "new terminal" → a blank shell; an agent type must be named explicitly.
-            let type = firstMatch(agentTypeRE, phrase) ?? "shell"
+        let ct = tokens.map { clean($0) }
+        let codexSpaced = matches(codexSpacedRE, phrase)
+        // Spawn intent = starts with a spawn verb AND mentions a terminal/agent noun (or a
+        // misheard agent name). Resolve the type from any recognized alias, else blank shell.
+        if let first = ct.first, spawnVerbs.contains(first),
+           ct.contains(where: { spawnNouns.contains($0) }) || codexSpaced {
+            var type = "shell"
+            for t in ct { if let mapped = aliasToType[t] { type = mapped; break } }
+            if type == "shell" && codexSpaced { type = "codex" }
             var prompt: String?
             for tok in tokens { if let id = promptAliases[clean(tok)] { prompt = id; break } }
             return .spawn(agentType: type, prompt: prompt)

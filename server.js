@@ -15,7 +15,6 @@ import os from 'os';
 import fs from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { getUsage } from './usage.js';
 
 const execFileP = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -333,13 +332,25 @@ app.use('/vendor/xterm', express.static(path.join(__dirname, 'node_modules/@xter
 app.use('/vendor/xterm-css', express.static(path.join(__dirname, 'node_modules/@xterm/xterm/css')));
 app.use('/vendor/addon-fit', express.static(path.join(__dirname, 'node_modules/@xterm/addon-fit/lib')));
 
-// Per-provider API usage (rate-limit utilization) for the top-bar meter.
-// Read-only: reads each CLI's existing creds/logs, never writes them. Cached.
+// Per-provider API usage (Claude + Codex) for the top-bar meter — powered by the
+// local `ai-usage` CLI (`ai-usage --once --json`). Read-only: ai-usage reads your
+// own caches/credentials and never modifies them. Cached ~25s; serves stale on error.
+const AI_USAGE_BIN = resolveBin(process.env.CNOS_AIUSAGE_BIN || path.join(os.homedir(), '.local/bin/ai-usage'));
+let usageCache = { at: 0, data: null };
 app.get('/api/usage', async (req, res) => {
+  const force = req.query.force === '1';
+  if (!force && usageCache.data && Date.now() - usageCache.at < 25_000) return res.json(usageCache.data);
   try {
-    res.json(await getUsage({ force: req.query.force === '1' }));
+    const { stdout } = await execFileP(AI_USAGE_BIN, ['--once', '--json'], {
+      timeout: 15000, maxBuffer: 8 * 1024 * 1024,
+      env: { ...process.env, PATH: SPAWN_PATH, NO_COLOR: '1' },
+    });
+    const data = JSON.parse(stdout);
+    usageCache = { at: Date.now(), data };
+    res.json(data);
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    if (usageCache.data) return res.json(usageCache.data);   // serve last good snapshot on failure
+    res.status(500).json({ error: 'ai-usage unavailable: ' + e.message });
   }
 });
 

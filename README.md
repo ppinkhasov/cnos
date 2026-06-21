@@ -14,8 +14,10 @@ claude --permission-mode auto --effort max
 Voice runs through **local Whisper** (whisper.cpp) — hands-free, private, offline.
 No cloud speech API, no keys; audio never leaves your machine.
 
-A native **iOS/iPadOS client** (SwiftUI + SwiftTerm) lives in [`ios/`](ios/README.md) —
-the same fleet, terminals, and voice, connecting to your cnos server.
+It also runs **right in your terminal** — `cnos` gives you the same live grid + voice
+in any shell (see [Terminal CLI](#terminal-cli-cnos)) — and there's a native
+**iOS/iPadOS client** (SwiftUI + SwiftTerm) in [`ios/`](ios/README.md). All three
+clients share **one live fleet**: spawn in one, see it in the others.
 
 ## Quick start
 
@@ -219,24 +221,27 @@ If it isn't present, the strip simply stays empty.
 ## How it works
 
 ```
-Browser  ── xterm.js grid ──────────────── WebSocket (input/command/control) ──┐
-         └─ getUserMedia → VAD → MediaRecorder ── POST /transcribe (audio) ──┐  │
-                                                                             ▼  ▼
-                                                       server.js (Node + Express)
-                                                         │            │
-                                              ffmpeg + whisper.cpp   node-pty
-                                                  (transcribe)         │
-                                                                       ▼
-                                          shell / claude / codex / hermes  (×N)
+  Browser   ─┐
+  cnos CLI  ─┼─ WebSocket (spawn · input · command · control) ──┐
+  iOS app   ─┘   + POST /transcribe  (mic audio → local Whisper) │
+                                                                 ▼
+                                            server.js (Node + Express)
+                                              │                     │
+                                     ffmpeg + whisper.cpp        node-pty
+                                       (transcription)              │
+                                                                    ▼
+                              shell / claude / codex / hermes   (× N — one shared fleet)
 ```
 
-The Node server owns the PTYs and transcription; the browser captures audio and
-renders terminals. Spoken commands are recorded locally, transcribed by Whisper,
-parsed (`<agent> <command>`), and typed into that agent's terminal. Claude's
-first-run "trust this folder" prompt is auto-accepted. Multiple browser windows
-stay in sync (output is broadcast; scrollback is replayed on connect). Front-end
-assets in `public/` (incl. `themes.js`, `fonts.css`, and the bundled fonts) are
-served with `Cache-Control: no-cache`, so edits reach the browser on a normal reload.
+**Three clients — the browser, the `cnos` terminal CLI, and the iOS app — all speak
+the same WebSocket protocol to one server, so they share a single live fleet:** spawn
+in one and it shows up in the others; output is broadcast and scrollback is replayed
+on connect. The Node server owns the PTYs and transcription. Spoken commands (from any
+client) are recorded locally, transcribed by Whisper, parsed (`<agent> <command>`), and
+typed into that agent's terminal; Claude's first-run "trust this folder" prompt is
+auto-accepted. Front-end assets in `public/` (incl. `themes.js`, `fonts.css`, and the
+bundled fonts) are served with `Cache-Control: no-cache`, so edits reach the browser on
+a normal reload.
 
 ## ⚠️ Security
 

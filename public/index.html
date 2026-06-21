@@ -57,7 +57,12 @@
         <option value="codex">codex</option>
         <option value="hermes">hermes</option>
       </select>
-      <button id="addBtn" class="btn" title="Spawn a new agent of the selected type in the working directory">+ Add</button>
+      <label class="promptlabel">Loop&nbsp;Prompt
+        <select id="promptSel" class="typesel promptsel" title="Launch the agent preloaded with a loop prompt">
+          <option value="">— none —</option>
+        </select>
+      </label>
+      <button id="addBtn" class="btn" title="Spawn a new agent (with the selected loop prompt, if any) in the working directory">+ Add</button>
       <button id="micBtn" class="btn mic" title="Toggle voice control">
         <span class="dot"></span><span class="label">Listen</span>
       </button>
@@ -66,8 +71,7 @@
   </header>
 
   <!-- Orchestration panel — revealed only when the Orchestrate toggle is ON.
-       OFF leaves cnos exactly as it was: you route commands to agents yourself.
-       ON: set a goal + press Start → cnos spawns a lead + workers and runs the
+       Set a goal + Start → cnos spawns a lead + workers and runs the
        perceive→reason→act→observe loop, auto-adding workers when all are busy. -->
   <div id="orchPanel" class="orch-panel" hidden>
     <div class="orch-row">
@@ -111,11 +115,12 @@
   <main id="fleet">
     <div id="empty" class="empty">
       <h1>No agents yet</h1>
-      <p>Pick a type and click <b>+ Add</b> — or say <i>“new claude terminal”</i>
-         or <i>“new hermes terminal”</i>… Claude starts in
+      <p>Pick a type (and optionally a <b>role</b>) and click <b>+ Add</b> — or say
+         <i>“new terminal”</i> or <i>“new terminal, programmer”</i>… Claude starts in
          <code>--permission-mode auto --effort max</code> and each gets a call sign
          like <b>jack</b> or <b>zulu</b>.</p>
-      <p class="hint">Then hit <b>🎙 Listen</b> and say
+      <p class="hint">A role preloads a specialist prompt (programmer, architect, planner,
+         analyst, …). Then hit <b>🎙 Listen</b> and say
          <i>“jack, build a todo app”</i> or <i>“everyone, commit your work”</i>.</p>
     </div>
   </main>
@@ -127,7 +132,7 @@
         <span class="status"></span>
         <span class="name"></span>
         <span class="type"></span>
-        <span class="role" hidden>LEAD</span>
+        <span class="role" hidden></span>
         <span class="cwd"></span>
         <span class="spacer"></span>
         <button class="ctl interrupt" title="Stop the current task (Esc)">stop</button>

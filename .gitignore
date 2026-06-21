@@ -8,8 +8,8 @@ models/
 # local Claude Code settings (machine-specific)
 .claude/settings.local.json
 
-# orchestrator scratch — the lead agent's directive channel, written at runtime
-# into the agents' working dir (only appears here if CNOS_WORKDIR is the repo)
+# orchestrator directive channel — written at runtime into the agents' working dir
+# (only appears in the repo if CNOS_WORKDIR points here)
 .cnos/
 
 # logs / OS / editor cruft

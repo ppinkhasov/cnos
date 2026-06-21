@@ -185,7 +185,7 @@ browser features; in the terminal you get your terminal's own font and colors.
 | `CNOS_<TYPE>_BIN`     | the CLI name (`claude`, `codex`, …)       | path to that agent's CLI             |
 | `CNOS_<TYPE>_ARGS`    | per-type flags (see table; `shell` = none)| flags that terminal type launches with |
 | `CNOS_SHELL_BIN`      | `$SHELL` (e.g. `/bin/zsh`)                | shell used for blank terminals       |
-| `DEEPSEEK_API_KEY`    | `~/.hermes/.env` fallback                 | DeepSeek balance API credential      |
+| `CNOS_AIUSAGE_BIN`    | `~/.local/bin/ai-usage`                   | path to the `ai-usage` CLI (usage meter) |
 | `CNOS_WHISPER_BIN`    | auto (`whisper-cli`)                      | path to the whisper.cpp binary       |
 | `CNOS_WHISPER_MODEL`  | `models/ggml-base.en.bin`                 | Whisper model file                   |
 
@@ -194,20 +194,18 @@ Examples: `CNOS_WORKDIR=~/dev/myrepo npm start` ·
 
 ## Usage meter
 
-A strip under the top bar shows each subscription provider's rate-limit windows
-and the total DeepSeek API credit balance available. It polls `GET /api/usage` every 60s;
-click the strip to refresh now. Everything is **read-only**: the server reads
-each CLI's existing credentials/logs and never modifies them.
+A strip under the top bar shows **Claude + Codex** plan usage, powered by the local
+[`ai-usage`](https://). The **basics** sit in the strip — each provider's rate-limit
+windows (5h / 7d) with a bar. Click the **▸** arrow to expand the **full detail**:
+context-window use, token throughput (avg/peak per minute, cache-hit %), the active
+session, spend, and burn-rate trends with sparklines. Click the strip to refresh now;
+it also polls every 60s.
 
-| Provider | Source                                            | Freshness                                   |
-| -------- | ------------------------------------------------- | ------------------------------------------- |
-| `claude` | `GET /api/oauth/usage` (your Claude OAuth token)  | **live** while the token is valid           |
-| `codex`  | newest `~/.codex/sessions` rollout snapshot       | last Codex API call (shown "as of …")       |
-| `deepseek` | `GET /user/balance` (`DEEPSEEK_API_KEY`)       | **live** total available credit balance     |
-
-The `claude` CLI refreshes its own OAuth token; if it has expired (no Claude
-agent has run for a few hours) the meter says so and goes live again the next
-time a Claude agent runs.
+`GET /api/usage` runs `ai-usage --once --json` on the server (cached ~25s, serves the
+last good snapshot on error). Everything is **read-only** — `ai-usage` reads your own
+caches/credentials and never modifies them. It must be installed on the machine running
+the server (it lives at `~/.local/bin/ai-usage`; point elsewhere with `CNOS_AIUSAGE_BIN`).
+If it isn't present, the strip simply stays empty.
 
 ## How it works
 

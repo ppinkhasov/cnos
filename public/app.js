@@ -745,67 +745,83 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !CwdPop.
 
 renderCwdLabel();
 
-// ---- Usage meter (top bar) --------------------------------------------------
-// Polls /api/usage and renders a per-provider utilization strip. Read-only:
-// the server reads each CLI's existing creds/logs and never modifies them.
+// ---- Usage meter (top bar) — powered by the local `ai-usage` CLI ------------
+// GET /api/usage runs `ai-usage --once --json` on the server (Claude + Codex) and
+// returns its snapshot. The strip shows a compact summary; the ▸ arrow expands the
+// full per-provider detail (context, tokens, cost, session, trends). Read-only.
 const UsageEl = document.getElementById('usage');
-const USAGE_PROVIDER_IDS = new Set(['claude', 'codex', 'deepseek']);
-const WIN_LABEL = { '5h': '5h', '7d': '7d', '7d_opus': 'opus' };
+const UsageDetailsEl = document.getElementById('usageDetails');
+let usageData = null;
+let usageOpen = localStorage.getItem('cnos.usageOpen') === '1';
 
-const lvlClass = (p) => (p >= 80 ? 'lvl-hot' : p >= 50 ? 'lvl-warn' : 'lvl-ok');
-
-function fmtReset(iso) {
-  const ms = Date.parse(iso) - Date.now();
-  if (Number.isNaN(ms)) return '';
-  if (ms <= 0) return 'window has since reset';
+const lvlClass = (p) => (p >= 90 ? 'lvl-hot' : p >= 70 ? 'lvl-warn' : 'lvl-ok');
+const shortWin = (l) => String(l || '').replace('hour', 'h').replace('day', 'd').replace(/\s+/g, '');
+function fmtReset(ts) {                          // ts = epoch SECONDS
+  const ms = Number(ts) * 1000 - Date.now();
+  if (!Number.isFinite(ms)) return '';
+  if (ms <= 0) return 'resetting';
   const h = Math.floor(ms / 3.6e6), m = Math.round((ms % 3.6e6) / 6e4);
-  return h >= 1 ? `resets in ${h}h ${m}m` : `resets in ${m}m`;
+  return h >= 1 ? `${h}h ${m}m` : `${m}m`;
 }
-function fmtAsOf(iso) {
-  const t = Date.parse(iso); if (Number.isNaN(t)) return '';
-  return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+function fmtAgo(ts) {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - Number(ts)));
+  return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`;
 }
-function fmtCurrency(value, currency) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return `${value} ${currency}`;
-  try { return new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(amount); }
-  catch { return `${amount.toFixed(2)} ${currency}`; }
+function fmtNum(n) {
+  n = Number(n) || 0;
+  return n >= 1e9 ? (n / 1e9).toFixed(1) + 'B' : n >= 1e6 ? (n / 1e6).toFixed(1) + 'M'
+    : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(Math.round(n));
+}
+function usageBar(pct) {
+  const p = Math.max(0, Math.min(100, Number(pct) || 0)), L = lvlClass(p);
+  return `<span class="usage-bar ${L}"><i style="width:${p}%"></i></span><span class="usage-pct ${L}">${Math.round(p)}%</span>`;
 }
 
 function renderUsage(data) {
-  const providers = Array.isArray(data?.providers)
-    ? data.providers.filter((p) => USAGE_PROVIDER_IDS.has(p.id))
-    : [];
-  UsageEl.innerHTML = providers.map((p) => {
-    const cls = ['usage-chip'];
-    if (!p.available || p.creditAvailable === false) cls.push('off');
-    else if (!p.live) cls.push('stale');
+  usageData = data;
+  const provs = Object.values(data || {}).filter((p) => p && (p.windows || p.status));
+  if (!provs.length) { UsageEl.innerHTML = ''; UsageDetailsEl.hidden = true; return; }
 
-    let inner = `<span class="usage-name">${escapeHtml(p.label)}</span>`;
-    if (p.available && p.balances?.length) {
-      inner += p.balances.map((b) =>
-        `<span class="usage-balance" title="Total available balance">${escapeHtml(fmtCurrency(b.total, b.currency))}</span>`
-      ).join('');
-    } else if (p.available && p.windows?.length) {
-      inner += p.windows.map((w) => {
-        const pct = Math.round(w.usedPercent);
-        const L = lvlClass(pct);
-        const tip = `${w.label}${w.resetsAt ? ' · ' + fmtReset(w.resetsAt) : ''}`;
-        return `<span class="usage-win" title="${escapeHtml(tip)}">`
-          + `<span class="lab">${escapeHtml(WIN_LABEL[w.key] || w.key)}</span>`
-          + `<span class="usage-bar ${L}"><i style="width:${pct}%"></i></span>`
-          + `<span class="usage-pct ${L}">${pct}%</span></span>`;
-      }).join('');
-      inner += p.live
-        ? `<span class="usage-live" title="live from the usage API">● live</span>`
-        : (p.asOf
-            ? `<span class="usage-meta" title="${escapeHtml(p.reason || 'cached snapshot')}">as of ${escapeHtml(fmtAsOf(p.asOf))}</span>`
-            : (p.reason ? `<span class="usage-meta" title="${escapeHtml(p.reason)}">${escapeHtml(p.reason)}</span>` : ''));
-    } else {
-      inner += `<span class="usage-na">${escapeHtml(p.reason || 'unavailable')}</span>`;
+  const arrow = `<button id="usageArrow" class="usage-arrow" title="${usageOpen ? 'Hide' : 'Show'} usage details">${usageOpen ? '▾' : '▸'}</button>`;
+  UsageEl.innerHTML = arrow + provs.map((p) => {
+    const wins = (p.windows || []).map((w) =>
+      `<span class="usage-win" title="${escapeHtml(w.label)}${w.resets_at ? ` · resets in ${fmtReset(w.resets_at)}` : ''}">`
+      + `<span class="lab">${escapeHtml(shortWin(w.label))}</span>${usageBar(w.used)}</span>`).join('')
+      || `<span class="usage-na">${escapeHtml(p.detail || p.status || 'unavailable')}</span>`;
+    return `<div class="usage-chip" data-provider="${escapeHtml(String(p.provider || '').toLowerCase())}" title="${escapeHtml(p.plan || p.provider || '')}">`
+      + `<span class="usage-name">${escapeHtml(p.provider || '')}</span>${wins}</div>`;
+  }).join('');
+  document.getElementById('usageArrow').onclick = (e) => {
+    e.stopPropagation();
+    usageOpen = !usageOpen; localStorage.setItem('cnos.usageOpen', usageOpen ? '1' : '0');
+    renderUsage(usageData);
+  };
+  renderUsageDetails(provs);
+}
+
+// The ▾ expanded panel: every detail ai-usage reports, per provider.
+function renderUsageDetails(provs) {
+  UsageDetailsEl.hidden = !usageOpen;
+  if (!usageOpen) return;
+  UsageDetailsEl.innerHTML = provs.map((p) => {
+    const x = p.extras || {}, rows = [];
+    rows.push(`<div class="ud-head"><b>${escapeHtml(p.provider || '')}</b> <span class="ud-plan">${escapeHtml(p.plan || '')}</span>`
+      + ` <span class="ud-detail">${escapeHtml(p.detail || p.status || '')}${p.updated_at ? ` · ${fmtAgo(p.updated_at)}` : ''}</span></div>`);
+    for (const w of (p.windows || [])) {
+      const tr = (x.trends && x.trends['|' + w.label]) || {};
+      const bits = [];
+      if (w.resets_at) bits.push('resets ' + fmtReset(w.resets_at));
+      if (tr.burn_per_hour != null) bits.push(`${tr.burn_per_hour}%/h`);
+      if (tr.spark_24h) bits.push(`<span class="ud-spark">${escapeHtml(tr.spark_24h)}</span>`);
+      rows.push(`<div class="ud-row"><span class="ud-k">${escapeHtml(w.label)}</span>${usageBar(w.used)}<span class="ud-v">${bits.join(' · ')}</span></div>`);
     }
-    const chipTip = p.planType ? `${p.label} · ${p.planType} plan` : p.label;
-    return `<div class="${cls.join(' ')}" data-provider="${escapeHtml(p.id)}" title="${escapeHtml(chipTip)}">${inner}</div>`;
+    if (x.context) rows.push(`<div class="ud-row"><span class="ud-k">context</span>${usageBar(x.context.used_percentage)}`
+      + `<span class="ud-v">${fmtNum(x.context.total_input_tokens)} in · ${fmtNum(x.context.total_output_tokens)} out / ${fmtNum(x.context.context_window_size)}</span></div>`);
+    if (x.token_series) { const t = x.token_series;
+      rows.push(`<div class="ud-row"><span class="ud-k">tokens</span><span class="ud-v">${fmtNum(t.total_tokens)} · ${fmtNum(t.average_tokens_per_minute)}/min avg · ${fmtNum(t.peak_tokens_per_minute)}/min peak · ${Math.round(t.cache_hit_percent || 0)}% cache</span></div>`); }
+    if (x.cost) rows.push(`<div class="ud-row"><span class="ud-k">cost</span><span class="ud-v">$${(Number(x.cost.total_cost_usd) || 0).toFixed(2)} · +${x.cost.total_lines_added || 0}/-${x.cost.total_lines_removed || 0} lines</span></div>`);
+    if (x.session) rows.push(`<div class="ud-row"><span class="ud-k">session</span><span class="ud-v">${escapeHtml(x.session.name || '')}${x.session.project ? ' · ' + escapeHtml(x.session.project) : ''}${x.mode ? ` · ${escapeHtml(x.mode.effort || '')}${x.mode.thinking ? ' +thinking' : ''}` : ''}</span></div>`);
+    return `<div class="ud-prov" data-provider="${escapeHtml(String(p.provider || '').toLowerCase())}">${rows.join('')}</div>`;
   }).join('');
 }
 
@@ -816,6 +832,7 @@ async function refreshUsage(force) {
   } catch { /* keep last render */ }
 }
 
+// click the strip (not the ▸ arrow) to refresh now
 UsageEl.addEventListener('click', () => {
   UsageEl.style.opacity = '0.5';
   refreshUsage(true).finally(() => { UsageEl.style.opacity = ''; });

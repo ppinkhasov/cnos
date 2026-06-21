@@ -1,0 +1,45 @@
+# XcodeGen spec for the cnos native iOS client.
+#   brew install xcodegen   (already done on this machine)
+#   cd ios && xcodegen generate     →  Cnos.xcodeproj
+# Then open Cnos.xcodeproj in Xcode and Run on a simulator or device.
+name: Cnos
+options:
+  bundleIdPrefix: dev.cnos
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+
+packages:
+  # The verified, Foundation-only core (protocol, WS client, voice grammar, VAD).
+  CnosKit:
+    path: CnosKit
+  # Native terminal emulator — renders the agents' xterm output.
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm
+    from: "1.2.0"
+
+targets:
+  Cnos:
+    type: application
+    platform: iOS
+    sources:
+      - path: App
+        excludes:
+          - "Info.plist"
+    dependencies:
+      - package: CnosKit
+        product: CnosKit
+      - package: SwiftTerm
+        product: SwiftTerm
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.cnos.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"   # iPhone + iPad
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: App/Info.plist
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+        CODE_SIGN_STYLE: Automatic

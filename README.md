@@ -14,6 +14,9 @@ claude --permission-mode auto --effort max
 Voice runs through **local Whisper** (whisper.cpp) — hands-free, private, offline.
 No cloud speech API, no keys; audio never leaves your machine.
 
+A native **iOS/iPadOS client** (SwiftUI + SwiftTerm) lives in [`ios/`](ios/README.md) —
+the same fleet, terminals, voice, and orchestrator, connecting to your cnos server.
+
 ## Quick start
 
 ```bash

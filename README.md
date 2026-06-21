@@ -147,19 +147,20 @@ the same WebSocket — spawn in the terminal and it shows up in the browser too.
 
 ```bash
 npm link        # once, to put `cnos` on your PATH (or: npm install -g .)
-cnos            # attach: a full-screen TUI right in your terminal
+cnos            # opens the live grid right in your terminal
 ```
 
-`cnos` with no args **attaches** — one terminal full-screen with full TUI fidelity
-(claude's own UI renders perfectly). The prefix key is **Ctrl-A** (tmux-style):
+`cnos` with no args opens a **live grid** — every agent is its own pane, all tiled
+and visible at once, exactly like the web cards (each pane is a real terminal, so
+claude's own TUI renders inside it). It re-tiles as you resize the window. The
+prefix key is **Ctrl-A** (tmux-style):
 
 | Keys | Action |
 | ---- | ------ |
 | `Ctrl-A` `s` / `c` / `x` / `h` | new shell / claude / codex / hermes |
-| `Ctrl-A` `1`–`9` | switch to terminal N · `n` / `p` next / previous |
-| `Ctrl-A` `:` | type a command into the current terminal |
-| `Ctrl-A` `!` | broadcast a command to all terminals |
-| `Ctrl-A` `k` / `w` / `d` / `?` | kill · set workdir · detach · help |
+| `Ctrl-A` `1`–`9` | focus pane N · `n` / `p` next / previous |
+| `Ctrl-A` `:` | command → focused pane · `!` → all panes |
+| `Ctrl-A` `k` / `w` / `d` / `?` | kill focused · set workdir · detach · help |
 | `Ctrl-A` `Ctrl-A` | send a literal Ctrl-A to the terminal |
 
 One-shot subcommands (scriptable):

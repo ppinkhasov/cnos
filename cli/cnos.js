@@ -177,10 +177,16 @@ function cmdServe() {
   child.on('exit', (code) => process.exit(code || 0));
 }
 
+async function cmdMics() {
+  const { listMics } = await import('./voice.js');
+  console.log(await listMics());
+  process.exit(0);
+}
+
 function cmdHelp() {
   process.stdout.write(`cnos — voice-and-text fleet of terminals, in your terminal
 
-  cnos                         attach (full-screen TUI)
+  cnos                         the live grid + command bar (type or speak)
   cnos new [type] [opts]       spawn shell|claude|codex|hermes (default shell)
                                  --prompt <id>  --cwd <dir>  --name <call-sign>
   cnos ls                      list terminals
@@ -188,175 +194,179 @@ function cmdHelp() {
   cnos stop|clear|enter <tgt>  send a control key
   cnos kill <name>             kill a terminal
   cnos usage                   per-provider API usage
+  cnos mics                    list microphones (for --mic)
   cnos serve                   run the server in the foreground
 
-  --port <n> (default ${PORT})   --server ws://host:port (attach to a remote cnos)
+  --port <n> (default ${PORT})   --server ws://host:port   --mic <index>
 
-In attach mode the prefix key is Ctrl-A:
-  Ctrl-A s/c/x/h  new shell/claude/codex/hermes      Ctrl-A 1-9  switch to terminal N
-  Ctrl-A n/p      next / previous terminal           Ctrl-A k    kill current
-  Ctrl-A :        type a command into current         Ctrl-A !    broadcast to all
-  Ctrl-A w        set working dir for new terminals   Ctrl-A d    detach (leave fleet running)
-  Ctrl-A ?        help                                Ctrl-A Ctrl-A  send a literal Ctrl-A
+In the grid, the bottom bar is a command line — type OR speak (Ctrl-V) commands,
+routed like the web app:
+  "new claude terminal"   "jack build a login page"   "everyone stop"   "kill zulu"
+  Tab        cycle command target (all / each agent)
+  ← →        focus a pane (also sets the target)
+  Ctrl-V     toggle hands-free voice          Ctrl-Z  zoom into the focused pane
+  Ctrl-K     kill focused pane                Ctrl-D  detach (fleet keeps running)
 `);
   process.exit(0);
 }
 
-// ---- attach: live GRID TUI (terminal multiplexer) ---------------------------
-// Every agent gets a live pane, all tiled and visible at once — the cnos web grid,
-// in your terminal. Each agent's bytes feed a headless xterm sized to its pane, and
-// the compositor (render.js) paints them all each frame. Ctrl-A is the prefix key.
-const PREFIX = 0x01;     // Ctrl-A
+// ---- attach: web-style command bar + live agent grid ------------------------
+// The web app, in your terminal: a grid of live agent panes (top) + a persistent
+// command bar (bottom) where you TYPE or SPEAK commands — "new claude terminal",
+// "jack build a login page", "everyone stop" — routed through the same grammar as
+// the web. Hands-free voice (mic → /transcribe) toggles with Ctrl-V.
 const out = (s) => process.stdout.write(s);
 const termW = () => process.stdout.columns || 80;
 const termH = () => process.stdout.rows || 24;
 
 async function runAttach() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) fail('attach needs an interactive terminal (try `cnos ls` / `cnos send`)');
-  const { computeLayout, renderFrame, makeTerm } = await import('./render.js');
+  const { computeLayout, renderFrame, makeTerm, cup } = await import('./render.js');
+  const { parse } = await import('./grammar.js');
+  const { createVoice } = await import('./voice.js');
   await ensureServer();
   const api = await connect().catch((e) => fail('connect failed: ' + e.message));
 
-  const byId = new Map();          // id -> { id, name, type, promptLabel, term (headless) }
-  let order = [];                  // ids, in pane order
+  const byId = new Map();          // id -> { id, name, type, promptLabel, term }
+  let order = [];                  // ids in pane order
   let focusIdx = 0;
-  let layout = computeLayout(0, termW(), termH());
-  let mode = 'attach';             // attach | cmdkey | line | help
-  let line = '', lineKind = null, linePrompt = '';
-  let pendingFocus = false;        // focus the next spawned terminal
+  let target = 'all';              // command target: 'all' or an agent name
   let cwd = opts.cwd || '';
-  let dirty = false;
+  let line = '';                   // command-bar input
+  let zoom = false;                // raw passthrough to the focused pane
+  let pendingFocus = false;        // focus the next spawned terminal
+  let dirty = false, flashMsg = '', flashAt = 0;
+  let vState = 'off';
 
   const inOrder = () => order.map((id) => byId.get(id));
   const focused = () => byId.get(order[focusIdx]);
+  const names = () => inOrder().map((a) => a.name);
+  const promptAliases = () => { const m = {}; for (const p of (api.hello && api.hello.prompts) || []) for (const al of (p.aliases || [])) m[al] = p.id; return m; };
+  const flash = (m) => { flashMsg = m; flashAt = Date.now(); dirty = true; };
 
-  // Re-tile to the current terminal size; size every agent's headless term + PTY to
-  // its pane so each pane is a 1:1 view of that agent's screen.
+  const voice = createVoice({
+    httpUrl: HTTP_URL, mic: opts.mic,
+    onText: (t) => { flash('🎤 ' + t); routeLine(t); },
+    onState: (st, d) => { vState = st; if (st === 'error') flash('voice: ' + (d || '')); dirty = true; },
+  });
+
+  const layoutFor = () => computeLayout(zoom ? 1 : order.length, termW(), termH() - 2);
+  let layout = layoutFor();
+
   function relayout() {
-    layout = computeLayout(order.length, termW(), termH());
-    layout.panes.forEach((p, i) => {
-      const a = byId.get(order[i]); if (!a) return;
-      try { a.term.resize(p.innerCols, p.innerRows); } catch {}
-      api.send({ type: 'resize', id: a.id, cols: p.innerCols, rows: p.innerRows });
-    });
+    layout = layoutFor();
+    const targets = zoom ? (focused() ? [focused()] : []) : inOrder();
+    targets.forEach((a, i) => { const p = layout.panes[i]; if (!a || !p) return; try { a.term.resize(p.innerCols, p.innerRows); } catch {} api.send({ type: 'resize', id: a.id, cols: p.innerCols, rows: p.innerRows }); });
     if (focusIdx >= order.length) focusIdx = Math.max(0, order.length - 1);
-    draw(true);
+    draw();
   }
-  function draw(force) {
-    if (mode !== 'attach') return;            // overlays (line/help/cmdkey) own the screen
-    if (!order.length) { out('\x1b[2J\x1b[H\x1b[2m  cnos — no terminals.  Ctrl-A then s/c/x/h to spawn · ? help · d detach\x1b[0m'); return; }
-    out(renderFrame(inOrder(), layout, focusIdx, { accent: '36' }));
-    void force;
+
+  function barStatus(W) {
+    const vIcon = { off: '○ voice', listening: '◉ listening', speaking: '◉ speaking', thinking: '… hearing', error: '⚠ voice' }[vState] || '○ voice';
+    let t = (flashMsg && Date.now() - flashAt < 4000) ? ' ' + flashMsg
+      : ` ${vIcon}   target: ${target}   ${order.length} agent${order.length === 1 ? '' : 's'}` + (zoom ? '   [ZOOM — Esc back]' : '   ·  Tab target · ←→ focus · ^V voice · ^Z zoom · ^K kill · ^D quit');
+    t = [...t].length > W ? t.slice(0, W) : t.padEnd(W);
+    return '\x1b[7m' + t + '\x1b[0m';
+  }
+  function barInput(W) {
+    if (zoom) return '\x1b[2m  typing goes to the zoomed pane — Esc to return\x1b[0m';
+    const txt = '❯ ' + line;
+    return '\x1b[1m' + (txt.length > W ? txt.slice(txt.length - W) : txt.padEnd(W)) + '\x1b[0m';
+  }
+  function draw() {
+    const W = termW(), H = termH();
+    let s = '\x1b[?2026h\x1b[?25l\x1b[H';
+    let cursor = null;
+    if (!order.length) {
+      s += '\x1b[2J' + cup(1, 2) + '\x1b[2mcnos — no terminals yet. Type \x1b[0m\x1b[1mnew claude terminal\x1b[0m\x1b[2m (or \x1b[0m\x1b[1mnew terminal\x1b[0m\x1b[2m), or press ^V to talk.\x1b[0m';
+    } else if (zoom) {
+      const r = renderFrame([focused()], layout, 0, { accent: '36' }); s += r.paint; cursor = r.cursor;
+    } else {
+      s += renderFrame(inOrder(), layout, focusIdx, { accent: '36' }).paint;
+    }
+    s += cup(H - 2, 0) + barStatus(W) + cup(H - 1, 0) + barInput(W);
+    s += '\x1b[?2026l';
+    if (zoom && cursor) s += '\x1b[?25h' + cup(cursor[0], cursor[1]);
+    else s += '\x1b[?25h' + cup(H - 1, Math.min(W - 1, 2 + line.length));
+    out(s);
   }
   const scheduleDraw = () => { dirty = true; };
-  const ticker = setInterval(() => { if (dirty && mode === 'attach') { dirty = false; draw(); } }, 36); // ~28fps, only when changed
+  const ticker = setInterval(() => { if (dirty) { dirty = false; draw(); } }, 36);
 
   api.attach((m) => {
     switch (m.type) {
       case 'list': {
         order = m.terminals.map((t) => t.id);
-        for (const t of m.terminals) {
-          let a = byId.get(t.id);
-          if (!a) { a = { id: t.id, term: makeTerm(40, 10) }; byId.set(t.id, a); }
-          a.name = t.name; a.type = t.agentType || 'shell'; a.promptLabel = t.promptLabel || '';
-        }
+        for (const t of m.terminals) { let a = byId.get(t.id); if (!a) { a = { id: t.id, term: makeTerm(40, 10) }; byId.set(t.id, a); } a.name = t.name; a.type = t.agentType || 'shell'; a.promptLabel = t.promptLabel || ''; }
         for (const id of [...byId.keys()]) if (!order.includes(id)) { try { byId.get(id).term.dispose(); } catch {} byId.delete(id); }
-        relayout();
-        break;
+        if (target !== 'all' && !names().includes(target)) target = 'all';
+        relayout(); break;
       }
       case 'spawned': {
         if (!byId.has(m.id)) byId.set(m.id, { id: m.id, name: m.name, type: m.agentType || 'shell', promptLabel: m.promptLabel || '', term: makeTerm(40, 10) });
         if (!order.includes(m.id)) order.push(m.id);
-        if (pendingFocus) { pendingFocus = false; focusIdx = order.indexOf(m.id); }
-        relayout();
-        break;
+        if (pendingFocus) { pendingFocus = false; focusIdx = order.indexOf(m.id); target = m.name; }
+        flash(`+ ${m.agentType || 'agent'} ${m.name}`); relayout(); break;
       }
       case 'output': { const a = byId.get(m.id); if (a) { a.term.write(m.data); scheduleDraw(); } break; }
-      case 'exit': {
-        const a = byId.get(m.id); if (a) { try { a.term.dispose(); } catch {} byId.delete(m.id); }
-        order = order.filter((x) => x !== m.id);
-        relayout();
-        break;
-      }
-      case 'spawn-error': overlay('error: ' + m.message); break;
+      case 'exit': { const a = byId.get(m.id); if (a) { try { a.term.dispose(); } catch {} byId.delete(m.id); } order = order.filter((x) => x !== m.id); if (zoom && !focused()) zoom = false; relayout(); break; }
+      case 'spawn-error': flash('error: ' + m.message); break;
     }
   });
 
-  out('\x1b[?1049h');                          // alternate screen (restored on detach)
+  out('\x1b[?1049h');                          // alternate screen
   process.stdin.setRawMode(true); process.stdin.resume();
   process.stdin.on('data', onKey);
   process.stdout.on('resize', relayout);
   api.ws.on('close', () => { teardown(); process.stderr.write('cnos: connection closed\n'); process.exit(1); });
-  draw(true);
+  draw();
 
-  function spawnType(t) { pendingFocus = true; api.send({ type: 'spawn', agentType: t, cwd: cwd || undefined }); }
-  function setFocus(i) { if (i >= 0 && i < order.length) { focusIdx = i; draw(true); } }
-  function cycle(d) { if (order.length) { focusIdx = (focusIdx + d + order.length) % order.length; draw(true); } }
+  function spawnType(t, prompt) { pendingFocus = true; api.send({ type: 'spawn', agentType: t, cwd: cwd || undefined, prompt: prompt || undefined }); }
+  function setFocus(i) { if (i >= 0 && i < order.length) { focusIdx = i; target = focused().name; draw(); } }
+  function cycleFocus(d) { if (order.length) setFocus((focusIdx + d + order.length) % order.length); }
+  function cycleTarget() { const list = ['all', ...names()]; const i = list.indexOf(target); target = list[(i + 1) % list.length]; if (target !== 'all') focusIdx = Math.max(0, names().indexOf(target)); draw(); }
   function detach() { teardown(); process.stdout.write('detached — fleet still running (reopen with `cnos`)\n'); process.exit(0); }
-  function overlay(text) { out(`\x1b7\x1b[${termH()};1H\x1b[2K\x1b[7m ${text} \x1b[0m\x1b8`); }
+
+  // Route a typed line OR a voice transcript through the shared grammar.
+  function routeLine(text) {
+    const t = String(text).trim(); if (!t) return;
+    const r = parse(t, { activeNames: names(), promptAliases: promptAliases() });
+    if (!r || r.kind === 'echo') return;
+    if (r.kind === 'spawn') return spawnType(r.agentType, r.prompt);
+    if (r.kind === 'select') { const i = names().indexOf(r.target); if (i >= 0) setFocus(i); else { target = r.target; draw(); } return; }
+    if (r.kind === 'control') return api.send({ type: 'control', target: r.target, action: r.action });
+    if (r.kind === 'command') return api.send({ type: 'command', target: r.target, text: r.text });
+    api.send({ type: 'command', target, text: t });   // unrecognized target → command to current target
+  }
 
   function onKey(data) {
-    if (mode === 'help') { mode = 'attach'; draw(true); return; }
-    if (mode === 'line') return onLineKey(data);
-    if (mode === 'cmdkey') { mode = 'attach'; return onCmd(data); }
-    if (data.length === 1 && data[0] === PREFIX) {
-      mode = 'cmdkey';
-      overlay('cnos: s/c/x/h spawn · 1-9 focus · n/p · : cmd · ! all · k kill · w cwd · ? help · d detach');
+    if (zoom) {
+      if (data.length === 1 && (data[0] === 0x1b || data[0] === 0x1a)) { zoom = false; relayout(); return; } // Esc / Ctrl-Z
+      const a = focused(); if (a) api.send({ type: 'input', id: a.id, data: data.toString('utf8') });
       return;
     }
-    const a = focused(); if (a) api.send({ type: 'input', id: a.id, data: data.toString('utf8') });
+    if (data[0] === 0x1b && data.length > 1) {            // arrow escape sequences
+      const seq = data.toString('latin1');
+      if (seq === '\x1b[C') cycleFocus(1); else if (seq === '\x1b[D') cycleFocus(-1);
+      return;
+    }
+    if (data.length === 1) {
+      const b = data[0];
+      if (b === 0x0d || b === 0x0a) { const v = line; line = ''; routeLine(v); draw(); return; } // Enter
+      if (b === 0x1b) { line = ''; draw(); return; }                                             // Esc clears
+      if (b === 0x7f || b === 0x08) { line = line.slice(0, -1); draw(); return; }                 // Backspace
+      if (b === 0x09) return cycleTarget();                                                       // Tab
+      if (b === 0x16) { voice.toggle(); return; }                                                 // Ctrl-V
+      if (b === 0x1a) { if (order.length) { zoom = true; relayout(); } return; }                  // Ctrl-Z zoom
+      if (b === 0x0b) { const a = focused(); if (a) api.send({ type: 'kill', id: a.id }); return; } // Ctrl-K
+      if (b === 0x04) return detach();                                                            // Ctrl-D
+      if (b === 0x03) { line = ''; draw(); return; }                                              // Ctrl-C clears
+    }
+    const s = data.toString('utf8').replace(/[\x00-\x1f\x7f]/g, '');
+    if (s) { line += s; draw(); }
   }
 
-  function onCmd(data) {
-    if (data.length === 1 && data[0] === PREFIX) { const a = focused(); if (a) api.send({ type: 'input', id: a.id, data: '\x01' }); return; }
-    const k = data.toString('utf8');
-    if (k === 's' || k === 'c' || k === 'x' || k === 'h') return spawnType({ s: 'shell', c: 'claude', x: 'codex', h: 'hermes' }[k]);
-    if (k >= '1' && k <= '9') return setFocus(+k - 1);
-    if (k === 'n') return cycle(1);
-    if (k === 'p') return cycle(-1);
-    if (k === 'k') { const a = focused(); if (a) api.send({ type: 'kill', id: a.id }); return; }
-    if (k === 'd' || k === 'q') return detach();
-    if (k === ':') return startLine('cmd', ':');
-    if (k === '!') return startLine('all', '!all> ');
-    if (k === 'w') return startLine('cwd', 'cwd> ');
-    if (k === '?') return showHelp();
-    draw(true); // unknown — repaint over the hint line
-  }
-
-  function startLine(kind, prompt) { mode = 'line'; lineKind = kind; line = ''; linePrompt = prompt; drawLine(); }
-  function drawLine() { out(`\x1b[${termH()};1H\x1b[2K\x1b[?25h\x1b[1m${linePrompt}\x1b[0m${line}`); }
-  function onLineKey(data) {
-    if (data[0] === 0x0d || data[0] === 0x0a) { const v = line; mode = 'attach'; runLine(lineKind, v); draw(true); return; }
-    if (data[0] === 0x1b) { mode = 'attach'; draw(true); return; }                 // Esc cancels
-    if (data[0] === 0x7f || data[0] === 0x08) { line = line.slice(0, -1); drawLine(); return; }
-    const s = data.toString('utf8').replace(/[\x00-\x1f]/g, ''); if (s) { line += s; drawLine(); }
-  }
-  function runLine(kind, v) {
-    if (kind === 'cwd') { cwd = v.trim(); overlay(`new terminals spawn in: ${cwd || '(server default)'}`); return; }
-    if (!v) return;
-    const a = focused();
-    if (kind === 'cmd' && a) api.send({ type: 'command', target: a.name, text: v });
-    else if (kind === 'all') api.send({ type: 'command', target: 'all', text: v });
-  }
-
-  function showHelp() {
-    mode = 'help'; out('\x1b[2J\x1b[H\x1b[?25l');
-    out([
-      '\x1b[1m cnos — live grid in your terminal (Ctrl-A is the prefix)\x1b[0m', '',
-      '   Every agent is a live pane, all visible at once — like the web grid.', '',
-      '   Ctrl-A s / c / x / h    new shell / claude / codex / hermes',
-      '   Ctrl-A 1-9              focus pane N        Ctrl-A n / p   next / previous',
-      '   Ctrl-A :                command → focused pane',
-      '   Ctrl-A !                command → ALL panes',
-      '   Ctrl-A k                kill focused        Ctrl-A w   set working dir',
-      '   Ctrl-A d                detach (the fleet keeps running)',
-      '   Ctrl-A Ctrl-A           send a literal Ctrl-A to the pane',
-      '', '   Typing goes to the focused pane. Same fleet as the browser + iOS app.',
-      '', '\x1b[2m   press any key to return\x1b[0m',
-    ].join('\r\n'));
-  }
-
-  function teardown() { try { process.stdin.setRawMode(false); } catch {} clearInterval(ticker); out('\x1b[?25h\x1b[0m\x1b[?1049l'); }
+  function teardown() { try { voice.stop(); } catch {} try { process.stdin.setRawMode(false); } catch {} clearInterval(ticker); out('\x1b[?25h\x1b[0m\x1b[?1049l'); }
   process.on('exit', teardown);
   process.on('SIGTERM', () => { teardown(); process.exit(0); });
 }
@@ -374,6 +384,7 @@ async function runAttach() {
       case 'enter': await cmdControl('enter'); break;
       case 'kill': await cmdKill(); break;
       case 'usage': await cmdUsage(); break;
+      case 'mics': case 'mic': await cmdMics(); break;
       case 'serve': cmdServe(); break;
       case 'help': case '--help': case '-h': cmdHelp(); break;
       default: fail(`unknown command "${cmd}" — try \`cnos help\``);

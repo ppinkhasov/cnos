@@ -87,12 +87,15 @@ function rowAnsi(buf, y, width) {
   return out + '\x1b[0m';
 }
 
-// Build the whole-screen frame. `agents[i]` (with .term/.name/.type) maps to panes[i].
-// focusIdx gets a highlighted header and the real cursor. accent: SGR for focus header.
+// Paint the agent panes. `agents[i]` (with .term/.name/.type) maps to panes[i]; the
+// focused pane gets a highlighted header. Returns { paint, cursor } where `paint` is
+// absolute-positioned cell output (no screen-clear, no sync wrap — the caller composes
+// the full frame, e.g. grid + command bar) and `cursor` is [row,col] of the focused
+// pane's cursor (0-based) or null. accent = SGR color for the focused header.
 export function renderFrame(agents, layout, focusIdx, opts = {}) {
   const { panes, W } = layout;
-  const accent = opts.accent || '36';     // focused header color (cyan-ish default)
-  let s = '\x1b[?2026h\x1b[?25l\x1b[H';   // begin synchronized update, hide cursor, home
+  const accent = opts.accent || '36';
+  let s = '';
   let cursor = null;
 
   for (let i = 0; i < panes.length; i++) {
@@ -106,17 +109,15 @@ export function renderFrame(agents, layout, focusIdx, opts = {}) {
       if (focused) {
         const cx = Math.max(0, Math.min(p.w - 1, buf.cursorX));
         const cy = Math.max(0, Math.min(p.h - 2, buf.cursorY));
-        cursor = move(p.y + 1 + cy, p.x + cx);
+        cursor = [p.y + 1 + cy, p.x + cx];
       }
     } else {
       for (let y = 0; y < p.h - 1; y++) s += move(p.y + 1 + y, p.x) + ' '.repeat(p.w);
     }
-    // separator column to the right of this pane (if it isn't at the screen edge)
-    const gx = p.x + p.w;
+    const gx = p.x + p.w;                              // separator column (not at screen edge)
     if (gx < W) for (let y = 0; y < p.h; y++) s += move(p.y + y, gx) + '\x1b[0;2m│\x1b[0m';
   }
-
-  s += '\x1b[?2026l';                                  // end synchronized update
-  s += cursor ? '\x1b[?25h' + cursor : '\x1b[?25l';    // show cursor in the focused pane
-  return s;
+  return { paint: s, cursor };
 }
+
+export const cup = move;   // 0-based cursor position helper for the caller's command bar

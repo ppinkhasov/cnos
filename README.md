@@ -150,18 +150,26 @@ npm link        # once, to put `cnos` on your PATH (or: npm install -g .)
 cnos            # opens the live grid right in your terminal
 ```
 
-`cnos` with no args opens a **live grid** — every agent is its own pane, all tiled
-and visible at once, exactly like the web cards (each pane is a real terminal, so
-claude's own TUI renders inside it). It re-tiles as you resize the window. The
-prefix key is **Ctrl-A** (tmux-style):
+`cnos` with no args opens the **web app, in your terminal**: a **live grid** of agent
+panes (all tiled and visible at once, each a real terminal so claude's own TUI renders
+inside it) plus a **command bar** at the bottom. It re-tiles as you resize the window.
 
-| Keys | Action |
-| ---- | ------ |
-| `Ctrl-A` `s` / `c` / `x` / `h` | new shell / claude / codex / hermes |
-| `Ctrl-A` `1`–`9` | focus pane N · `n` / `p` next / previous |
-| `Ctrl-A` `:` | command → focused pane · `!` → all panes |
-| `Ctrl-A` `k` / `w` / `d` / `?` | kill focused · set workdir · detach · help |
-| `Ctrl-A` `Ctrl-A` | send a literal Ctrl-A to the terminal |
+The command bar is the main control — **type or speak** a command, routed through the
+same grammar as the web (so *"new claude terminal"*, *"jack build a login page"*,
+*"everyone stop"*, *"kill zulu"* all work):
+
+| Key | Action |
+| --- | ------ |
+| *type* + Enter | run the command (routes by name, or to the current target) |
+| **Ctrl-V** | toggle **hands-free voice** (mic → local Whisper → routed) |
+| **Tab** | cycle the command target (all / each agent) |
+| **← / →** | focus a pane (also sets the target) |
+| **Ctrl-Z** | zoom into the focused pane for hands-on typing (Esc to return) |
+| **Ctrl-K** / **Ctrl-D** | kill the focused pane · detach (fleet keeps running) |
+
+Voice uses `ffmpeg` to capture your mic and the server's `/transcribe` (local Whisper)
+— same as the browser. It auto-picks a real input device (skipping virtual ones like
+BlackHole); list them with `cnos mics` and override with `--mic <index>`.
 
 One-shot subcommands (scriptable):
 
@@ -169,13 +177,13 @@ One-shot subcommands (scriptable):
 cnos new claude --prompt loop --cwd ~/dev/app   # spawn (prints the call sign)
 cnos ls                                          # list terminals
 cnos send jack "build a login page"              # type a command into jack ("all" broadcasts)
-cnos stop jack            # interrupt   ·   cnos kill jack   ·   cnos usage
-cnos serve               # run the server in the foreground
+cnos stop jack       # interrupt  ·  cnos kill jack  ·  cnos usage  ·  cnos mics
+cnos serve           # run the server in the foreground
 ```
 
 It auto-starts the server if one isn't running (or target a remote one with
-`--server ws://host:port` / `--port N`). Voice, the theme picker, and fullscreen are
-browser features; in the terminal you get your terminal's own font and colors.
+`--server ws://host:port` / `--port N`). The theme picker and fullscreen stay
+browser-only; in the terminal you get your terminal's own font and colors.
 
 ## Configuration
 

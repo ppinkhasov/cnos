@@ -87,6 +87,26 @@ function rowAnsi(buf, y, width) {
   return out + '\x1b[0m';
 }
 
+// One pane's title bar, exactly `width` cells wide. The call-sign NAME is bold and
+// at full brightness; the index and type/role are dimmed — so it's instantly clear
+// which terminal each pane is, even on the unfocused panes. Focused panes get the
+// accent-colored bar; the whole bar (incl. padding) keeps the inverse background.
+function paneHeader(a, i, focused, width, accent) {
+  if (!a) return '\x1b[0;7;2m' + ' — '.padEnd(width).slice(0, width) + '\x1b[0m';
+  const nameSGR = focused ? `\x1b[0;1;7;${accent}m` : '\x1b[0;1;7m';     // bold + bright
+  const dimSGR = focused ? `\x1b[0;7;${accent}m` : '\x1b[0;7;2m';        // muted chrome
+  const idx = `${focused ? '▸' : ' '} ${i + 1}  `;
+  const name = String(a.name || '').toUpperCase();
+  const meta = `${a.type ? '  ' + a.type : ''}${a.promptLabel ? ' · ' + a.promptLabel : ''} `;
+  let used = 0, out = '';
+  const add = (sgr, text) => { if (used >= width) return; const ch = [...text]; const take = Math.min(ch.length, width - used); if (take > 0) { out += sgr + ch.slice(0, take).join(''); used += take; } };
+  add(dimSGR, idx);
+  add(nameSGR, name);
+  add(dimSGR, meta);
+  if (used < width) out += dimSGR + ' '.repeat(width - used);            // pad keeps the bar solid
+  return out + '\x1b[0m';
+}
+
 // Paint the agent panes. `agents[i]` (with .term/.name/.type) maps to panes[i]; the
 // focused pane gets a highlighted header. Returns { paint, cursor } where `paint` is
 // absolute-positioned cell output (no screen-clear, no sync wrap — the caller composes
@@ -100,9 +120,7 @@ export function renderFrame(agents, layout, focusIdx, opts = {}) {
 
   for (let i = 0; i < panes.length; i++) {
     const p = panes[i], a = agents[i], focused = i === focusIdx;
-    const tag = a ? ` ${i + 1} ${a.name}${a.type ? ' · ' + a.type : ''}${a.promptLabel ? ' · ' + a.promptLabel : ''} ` : ' — ';
-    const label = (tag.length > p.w ? tag.slice(0, p.w) : tag.padEnd(p.w));
-    s += move(p.y, p.x) + (focused ? `\x1b[1;7;${accent}m` : '\x1b[7;2m') + label + '\x1b[0m';
+    s += move(p.y, p.x) + paneHeader(a, i, focused, p.w, accent);
     if (a && a.term) {
       const buf = a.term.buffer.active;
       for (let y = 0; y < p.h - 1; y++) s += move(p.y + 1 + y, p.x) + rowAnsi(buf, y, p.w);

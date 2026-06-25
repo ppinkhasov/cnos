@@ -5,10 +5,10 @@ Command a fleet of terminals — blank shells and AI coding agents — with your
 cnos launches a grid of real terminals — a **blank shell** by default, or a coding
 agent (**claude, codex, hermes**) — each with its own call sign (`jack`, `zulu`,
 `echo`, …), driven by voice or text. Agents can be preloaded with a specialist
-**role** prompt and start in **auto mode** with **max effort**:
+**role** prompt and start in **auto mode** with **xhigh effort**:
 
 ```
-claude --permission-mode auto --effort max
+claude --permission-mode auto --effort xhigh
 ```
 
 Voice runs through **local Whisper** (whisper.cpp) — hands-free, private, offline.
@@ -57,7 +57,7 @@ still works when you open cnos on the host machine itself.
 | Type     | Launches                              | Auto mode                |
 | -------- | ------------------------------------- | ------------------------ |
 | `shell` *(default)* | your `$SHELL` (e.g. `/bin/zsh`) — a plain blank terminal, no agent | — |
-| `claude` | `claude --permission-mode auto --effort max` | auto-accept edits |
+| `claude` | `claude --permission-mode auto --effort xhigh` | auto-accept edits |
 | `codex`  | `codex --sandbox workspace-write --ask-for-approval on-request` | auto (workspace-write) |
 | `hermes` | `hermes`                              | —                        |
 
@@ -149,21 +149,32 @@ the same WebSocket — spawn in the terminal and it shows up in the browser too.
 
 ```bash
 npm link        # once, to put `cnos` on your PATH (or: npm install -g .)
-cnos            # opens the live grid right in your terminal
+cnos            # opens the live grid — already listening for your voice
 ```
 
 `cnos` with no args opens the **web app, in your terminal**: a **live grid** of agent
 panes (all tiled and visible at once, each a real terminal so claude's own TUI renders
-inside it) plus a **command bar** at the bottom. It re-tiles as you resize the window.
+inside it) plus a **command bar** at the bottom. Each pane's title bar shows its call
+sign **in bold, uppercase** so you can tell terminals apart at a glance (with a `▸` on
+the focused one); the grid re-tiles as you resize the window.
 
-The command bar is the main control — **type or speak** a command, routed through the
-same grammar as the web (so *"new claude terminal"*, *"jack build a login page"*,
-*"everyone stop"*, *"kill zulu"* all work):
+**Voice is hands-free and on from launch** — the grid opens *listening*, so you can drive
+the whole fleet without touching the keyboard. The bottom bar shows a live **mic-level
+meter** and a **listening / hearing you / transcribing** indicator, plus a flash of what
+it heard and did, so you can see it working. Just talk:
+
+- *“new claude terminal”* · *“new terminal”* — spawn an agent (or a blank shell)
+- *“jack, build a login page”* — route to jack · *“everyone, stop”* — broadcast
+- *“mute”* / *“listen”* — pause or resume voice · *“zoom”* / *“zoom out”* · *“detach”*
+
+You can also **type** the same commands — routed through the same grammar as the web
+(so *"new claude terminal"*, *"jack build a login page"*, *"everyone stop"*, *"kill
+zulu"* all work):
 
 | Key | Action |
 | --- | ------ |
 | *type* + Enter | run the command (routes by name, or to the current target) |
-| **Ctrl-V** | toggle **hands-free voice** (mic → local Whisper → routed) |
+| **Ctrl-V** | mute / unmute **hands-free voice** (mic → local Whisper → routed) |
 | **Tab** | cycle the command target (all / each agent) |
 | **← / →** | focus a pane (also sets the target) |
 | **Ctrl-Z** | zoom into the focused pane for hands-on typing (Esc to return) |
@@ -171,7 +182,8 @@ same grammar as the web (so *"new claude terminal"*, *"jack build a login page"*
 
 Voice uses `ffmpeg` to capture your mic and the server's `/transcribe` (local Whisper)
 — same as the browser. It auto-picks a real input device (skipping virtual ones like
-BlackHole); list them with `cnos mics` and override with `--mic <index>`.
+BlackHole); list them with `cnos mics` and override with `--mic <index>`. Start without
+voice with `cnos --no-voice` (or `CNOS_NO_VOICE=1`).
 
 One-shot subcommands (scriptable):
 

@@ -29,7 +29,7 @@ const WORKDIR = process.env.CNOS_WORKDIR || os.homedir();
 const AGENT_DEFAULTS = {
   // A blank terminal: just the user's interactive shell, no agent.
   shell:  { bin: process.env.SHELL || '/bin/zsh', args: [] },
-  claude: { bin: 'claude', args: ['--permission-mode', 'auto', '--effort', 'max'] },
+  claude: { bin: 'claude', args: ['--permission-mode', 'auto', '--effort', 'xhigh'] },
   // codex 0.140+ removed `--full-auto`; its modern equivalent is an explicit
   // sandbox + approval policy. workspace-write + on-request = edit/run inside the
   // workdir without prompting, only escalate when the model asks — "auto", NOT
